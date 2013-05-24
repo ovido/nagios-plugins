@@ -83,6 +83,10 @@
 #
 # - 26 April 2013 Version 3.0.0
 #    - Added support for SNMPv3 (René Koch)
+#    - Changed exit code to 3 (UNKNOWN) if input validation fails
+#
+# - 06 May 2013 Version 3.1.0
+#    - Added warning and critical checks (René Koch)
 
 
 use strict;
@@ -97,7 +101,7 @@ use Net::SNMP;
 # 1. Define variables
 
 # General stuff
-my $version = '3.0';
+my $version = '3.1';
 my $progname = basename($0);
 my $help;                               # If some help is wanted....
 my $NoA="";                             # Number of arguments handled over
@@ -154,6 +158,7 @@ my $swFCPortC3Discards;                 # er_c3_timeout
 
 my $r_code = 0;                         # Exitcode for get_out
 my $r_message;                          # Message for get_out
+my $tmp_message = "";			# Temp message for get_out
 my $multiline;                          # Multiline output in overview. This mean technically that
                                         # a multiline output uses a HTML <br> for the GUI instead of
                                         # Be aware that your messing connections (email, SMS...) must use
@@ -177,6 +182,11 @@ my $SFP_TempHighWarn_def = 10;          # This is the default offset for $SPF_Te
 my $allports;                           # Default is only to show ports which are too hot. With this flag all
                                         # ports will be shown.
 my $sensorinfo;                           # 
+
+my @o_type = ();			# type of value for warning and critical
+my @o_warn = ();			# warning
+my @o_crit = ();			# critical
+my %type;				# type hash
 
 # 2. Define arrays and hashes  
 
@@ -237,6 +247,9 @@ GetOptions
          "n=s" => \$snmpv3context,    "context=s"        => \$snmpv3context,
 	                              "multiline"        => \$multiline,
 	                              "maxsfptemp=s"     => \$SFP_TempHigh,
+         "t=s" => \@o_type,           "type=s"           => \@o_type,
+         "w=s" => \@o_warn,           "warning=s"        => \@o_warn,
+         "c=s" => \@o_crit,           "critical=s"       => \@o_crit,
          "h"   => \$help,             "help"             => \$help);
 
 # Several checks to check parameters
@@ -263,6 +276,27 @@ if ( $NoA == -1 )
    usage();
    exit 3;
    }
+
+# Check values of type
+if (scalar @o_type > 0){
+  if ($#o_warn < $#o_type){
+    print "Please specify warning value per type!\n";
+    usage();
+    exit 3;
+  }
+  if ($#o_crit < $#o_type){
+    print "Please specify critical value per type!\n";
+    usage();
+    exit 3;
+  }
+
+  # push warning and critical values into hash
+  for (my $i=0;$i<=$#o_type;$i++){
+    $type{ $o_type[$i] }{'warn'} = $o_warn[$i];
+    $type{ $o_type[$i] }{'crit'} = $o_crit[$i];
+  }
+
+}
 
 if (!$hostname)
    {
@@ -1117,51 +1151,62 @@ sub get_port_data()
     $partner_wwn = "$partner_wwn$partner_wwn[12]$partner_wwn[13]:";
     $partner_wwn = "$partner_wwn$partner_wwn[14]$partner_wwn[15]";
 
-    if ( $perf_data )
+    if ( $perf_data || scalar @o_type > 0 )
        {
        $oid = ".1.3.6.1.4.1.1588.2.1.1.1.6.2.1.11.$fc_port_snmp";
        $result = get_request($oid);
        $swFCPortTxWords = $$result{$oid};
+       check_type("stat_wtx",$swFCPortTxWords);
       
        $oid = ".1.3.6.1.4.1.1588.2.1.1.1.6.2.1.12.$fc_port_snmp";
        $result = get_request($oid);
        $swFCPortRxWords = $$result{$oid};
+       check_type("stat_wrx",$swFCPortRxWords);
       
        $oid = ".1.3.6.1.4.1.1588.2.1.1.1.6.2.1.13.$fc_port_snmp";
        $result = get_request($oid);
        $swFCPortTxFrames = $$result{$oid};
+       check_type("stat_ftx",$swFCPortTxFrames);
       
        $oid = ".1.3.6.1.4.1.1588.2.1.1.1.6.2.1.14.$fc_port_snmp";
        $result = get_request($oid);
        $swFCPortRxFrames = $$result{$oid};
+       check_type("stat_frx",$swFCPortRxFrames);
       
        $oid = ".1.3.6.1.4.1.1588.2.1.1.1.6.2.1.21.$fc_port_snmp";
        $result = get_request($oid);
        $swFCPortRxEncInFrs = $$result{$oid};
+       check_type("er_enc_in",$swFCPortRxEncInFrs);
       
        $oid = ".1.3.6.1.4.1.1588.2.1.1.1.6.2.1.22.$fc_port_snmp";
        $result = get_request($oid);
        $swFCPortRxCrcs = $$result{$oid};
+       check_type("er_crc",$swFCPortRxCrcs);
       
        $oid = ".1.3.6.1.4.1.1588.2.1.1.1.6.2.1.23.$fc_port_snmp";
        $result = get_request($oid);
        $swFCPortRxTruncs = $$result{$oid};
+       check_type("er_trunc",$swFCPortRxTruncs);
       
        $oid = ".1.3.6.1.4.1.1588.2.1.1.1.6.2.1.24.$fc_port_snmp";
        $result = get_request($oid);
        $swFCPortRxTooLongs = $$result{$oid};
+       check_type("er_toolong",$swFCPortRxTooLongs);
       
        $oid = ".1.3.6.1.4.1.1588.2.1.1.1.6.2.1.25.$fc_port_snmp";
        $result = get_request($oid);
        $swFCPortRxBadEofs = $$result{$oid};
+       check_type("er_bad_eof",$swFCPortRxBadEofs);
       
        $oid = ".1.3.6.1.4.1.1588.2.1.1.1.6.2.1.26.$fc_port_snmp";
        $result = get_request($oid);
        $swFCPortRxEncOutFrs = $$result{$oid};
+       check_type("er_enc_out",$swFCPortRxEncOutFrs);
       
        $oid = ".1.3.6.1.4.1.1588.2.1.1.1.6.2.1.28.$fc_port_snmp";
        $result = get_request($oid);
        $swFCPortC3Discards = $$result{$oid};
+       check_type("er_c3_timeout",$swFCPortC3Discards);
       
        $perf_data = "stat_wtx=$swFCPortTxWords;0;0;0;0";
        $perf_data .= " stat_wrx=$swFCPortRxWords;0;0;0;0";
@@ -1192,7 +1237,7 @@ sub get_port_data()
              }
           if ( $port_link_state == 2 )
              {
-             $r_code = 0;
+             $r_code = 0 if $r_code < 1;
              $r_message = "FC port $fc_port swFCPortPhyState is $port_phy_state{$port_phy_state_key}";
              }
           }
@@ -1214,13 +1259,13 @@ sub get_port_data()
              {
               if ($partner_wwn eq ":::::::" )
                  {
-                 $r_code = 0;
-                 $r_message ="FC port $fc_port swFCPortPhyState is $port_phy_state{$port_phy_state_key}. Partner unknown.|$perf_data";
+                 $r_code = 0 if $r_code < 1;
+                 $r_message ="FC port $fc_port swFCPortPhyState is $port_phy_state{$port_phy_state_key}. Partner unknown. $tmp_message|$perf_data";
                  }
               else
                  {
-                 $r_code = 0;
-                 $r_message = "FC port $fc_port swFCPortPhyState is $port_phy_state{$port_phy_state_key}. Partner is $partner_wwn.|$perf_data";
+                 $r_code = 0 if $r_code < 1;
+                 $r_message = "FC port $fc_port swFCPortPhyState is $port_phy_state{$port_phy_state_key}. Partner is $partner_wwn. $tmp_message|$perf_data";
                  }
              }
           }
@@ -1234,12 +1279,12 @@ sub get_port_data()
              }
           if ( $port_link_state == 2 )
              {
-             $r_code = 0;
+             $r_code = 0 if $r_code < 1;
              $r_message = "FC port $fc_port swFCPortOprStatus is $port_opr_state{$port_opr_state_key} and disabled.";
              }
           if ( $port_link_state == 3 )
              {
-             $r_code = 0;
+             $r_code = 0 if $r_code < 1;
              $r_message = "FC port $fc_port swFCPortOprStatus is $port_opr_state{$port_opr_state_key} and loopback.";
              }
           }
@@ -1256,6 +1301,27 @@ sub get_port_data()
        $r_message = "FC port $fc_port not possible to get operational state of the port.";
        }
     }
+
+
+
+sub check_type{
+  my $t_type  = $_[0];
+  my $t_value = $_[1];
+
+  # check warning and critical values
+  foreach my $t ( keys %type ){
+    next unless $t eq $t_type;
+    if ($t_value >= $type{ $t }{'crit'}){
+      $r_code = 2;
+      $tmp_message = "$t is CRITICAL ($t_value)";
+    }elsif ($t_value >= $type{ $t }{'warn'}){
+      if ($r_code < 2){ $r_code = 1; }
+      $tmp_message = "$t is WARNING ($t_value)";
+    }else{
+      if ($r_code < 1){ $r_code = 0; }
+    }
+  }
+}
 
 
 
@@ -1292,7 +1358,6 @@ sub usage()
     print "Usage: ";
     print "$progname ";
     print "[ -H <host> ] ";
-    print "[ -t <timeout> ] ";
     print "[ -C|--community=<community> ] ";
     print "[ -v|--snmpversion=<1|2c|3> ] ";
     print "[ -L|--seclevel=<noAuthNoPriv|authNoPriv|authPriv> ] ";
@@ -1311,6 +1376,9 @@ sub usage()
     print "[--maxsfptemp=<temperature>] ";
     print "[--allports]] ";
     print "[ -p|--performancedata ] ";
+    print "[ -t|--type=<type>] ";
+    print "[ -w|--warning=<warning>] ";
+    print "[ -c|--critical=<critical>] ";
     print "[--multiline]\n\n";
     }
 
@@ -1344,7 +1412,6 @@ sub help ()
     print "    --global                Global data like boot date, overall status etc.\n";
     print "\n";
     print "-p, --performancedata       Print performance data of the selected FC port.\n";
-    print "-t, --timeout=INTEGER       Seconds before plugin times out (default: 15)\n";
     print "    --sfptemp               Checks the temperature of all SFPs.\n";
     print "    --sfptemp_warn=INT      This is the warning offset the critical temperature as delivered\n";
     print "                            by the system. Default is $SFP_TempHighWarn_def Celsius.\n";
@@ -1357,5 +1424,19 @@ sub help ()
     print "                            output uses a HTML <br> for the GUI instead of \\n\n";
     print "                            Be aware that your messing connections (email, SMS...) must use\n";
     print "                            a filter to file out the <br>. A sed oneliner will do the job.\n";
+    print "-t, --type                  Parameter type for warning and critical values:\n";
+    print "                            stat_wtx = FC Port TX Words\n";
+    print "                            stat_wrx = FC Port RX Words\n";
+    print "                            stat_ftx = FC Port TX Frames\n";
+    print "                            stat_frx = FC Port RX Frames\n";
+    print "                            er_enc_in = FC Port RX Enc In Frs\n";
+    print "                            er_crc = FC Port RX CRCs\n";
+    print "                            er_trunc = FC Port RX Truncs\n";
+    print "                            er_toolong = FC Port RX Too Longs\n";
+    print "                            er_bad_eof = FC Port RC Bad EOFs\n";
+    print "                            er_enc_out = FC Port RC Enc Out Frs\n";
+    print "                            er_c3_timeout = FC Port C3 Discards\n";
+    print "-w, --warning               Warning value for type\n";
+    print "-c, --critical              Critical value for type\n";
     }
 
