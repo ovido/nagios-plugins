@@ -5,6 +5,7 @@
 # check_emc_clariion.pl - checks the EMC CLARIION SAN devices
 # Copyright (C) 2005  NETWAYS GmbH, www.netways.de
 # Author: Michael Streb <michael.streb@netways.de>
+# Modified by Rene Koch <r.koch@ovido.at>.
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -22,6 +23,13 @@
 # $Id: 6a063e85b62db2ea3dabe38628284ea3c4938f3c $
 # ------------------------------------------------------------------------------
 # 
+
+# Changelog:
+# * Fri Dec 7 2012 Rene Koch <r.koch@ovido.at>
+# - added storage pool utilization check (including perfdata)
+# - added exclusion of iSCSI ports
+# - added exclusion of specific ports
+# - fixed error count calculation for FC ports
 
 # basic requirements
 use strict;
@@ -51,6 +59,8 @@ use vars qw (
   $opt_node
   $opt_user
   $opt_password
+  $opt_warn
+  $opt_crit
 
   $output
 
@@ -63,6 +73,8 @@ my $output;
 ### add some declaration in order to manage the --port option for check_portstate();
 my $opt_port;
 $opt_port=-1;
+my @opt_excl_port = undef;
+my $opt_excl_iscsi = undef;
 
 # a variable in order to manage the secure mode of Navicli
 my $secure;
@@ -102,6 +114,10 @@ GetOptions(
 	'u=s'     => \$opt_user,
 	'p=s'     => \$opt_password,
 	'port=s'  => \$opt_port,
+	'exclude-iscsi'	=> \$opt_excl_iscsi,
+	'exclude-port=i'	=> \@opt_excl_port,
+	'w=s'	  => \$opt_warn,
+	'c=s'	  => \$opt_crit,
 	'paths=s' => \$opt_pathcount
   ) || print_help(2);
 
@@ -136,6 +152,11 @@ if ( $opt_host && $opt_checktype ) {
 	}
 	if ($opt_checktype eq "hbastate" && $opt_pathcount ne "" && $opt_node ne "") {
 		check_hbastate();
+	}
+	if ($opt_checktype eq "storagepool"){
+		$opt_warn = 90 if ! defined $opt_warn;
+		$opt_crit = 95 if ! defined $opt_crit;
+		check_storagepool();
 	}
 	print_help(1, 'Wrong parameters specified!');
 }
@@ -401,16 +422,39 @@ sub check_portstate {
 			if( $_ =~ m/^SP\sPort\sID:\s+($opt_port)$/) {
 				$port_id = $1;
 				$portstate_line = 1;
-				$error_count = 0;
+				$error_count = 0 if $error_count <= 0;
 			} 
 		} else {
 
-			### if( $_ =~ m/^SP\sPort\sID:\s+($opt_port)$/) {
-			if( $_ =~ m/^SP\sPort\sID:\s+(\d+)$/) {
-				$port_id = $1;
-				$portstate_line = 1;
-				$error_count = 0;
-			} 
+			if ($#opt_excl_port > 0){
+				if( $_ =~ m/^SP\sPort\sID:\s+(\d+)$/) {
+					$port_id = $1;
+					$portstate_line = 1;
+					$error_count = 0 if $error_count <= 0;
+					
+					for (my $i=1;$i<=scalar(@opt_excl_port)-1;$i++){
+						if ($port_id == $opt_excl_port[$i]){
+							$portstate_line = 0;
+							$sp_line = 0;
+						}
+					}
+				}
+			}else{
+				if( $_ =~ m/^SP\sPort\sID:\s+(\d+)$/) {
+					$port_id = $1;
+					$portstate_line = 1;
+					$error_count = 0 if $error_count <= 0;
+				} 
+			}
+		}
+
+		# skip iSCSI interfaces if requested
+		if (defined $opt_excl_iscsi){
+#			if ($_ =~ m/^SP\sUID:\s+([0-9A-E]{2}:){15}[0-9A-E]{1}/){	# -> match for FC port
+			if ($_ =~ m/^SP\sUID:\s+iqn.(\d){4}-(\d){2}.com.emc:[a-z0-9.]+$/){
+				$portstate_line = 0;
+				$sp_line = 0;
+			}
 		}
 
 		if ($sp_section == 1 && $sp_line == 1 && $portstate_line == 1) {
@@ -540,6 +584,47 @@ sub check_hbastate {
 	exit $states{$state};
 }
 
+# check_storagepool();
+# check utilization of storage pool
+sub check_storagepool {
+	$state = 'UNKNOWN';
+	my $pool_name = undef;
+	my $pool_usage = undef;
+	   $output = "";
+	my $perf = undef;
+	if ($secure eq 0 ) {
+		open (NAVICLIOUT ,"$NAVICLI -h $opt_host storagepool -list |");
+	}
+	if ($secure eq 1 ) {
+		open (NAVICLIOUT ,"$NAVISECCLI -User $opt_user -Password $opt_password -Scope 0 -h $opt_host storagepool -list |");
+	}
+	while (<NAVICLIOUT>) {
+		# get pool name and percent full
+		if( $_ =~ m/^Pool\sName:\s+(\w+\s?\w?)/) {
+			$pool_name = $1;
+		} elsif ( $_ =~ m/^Percent\sFull:\s+(\d+.\d*)/) {
+			$pool_usage = $1;
+			if ($pool_usage < $opt_warn && $state ne "WARNING" && $state ne "CRITICAL"){	
+				$state = "OK";
+			}elsif ($pool_usage >= $opt_warn && $pool_usage < $opt_crit && $state ne "CRITICAL"){
+				$state = "WARNING";
+			}else{
+				$state = "CRITICAL";
+			}
+			$output .= $pool_name . ": " . $pool_usage . "% Full, ";
+			$perf .= "'" . $pool_name . "'=" . $pool_usage . "%;" . $opt_warn . ";" . $opt_crit . "; ";
+		}
+	}
+	close (NAVICLIOUT);
+	if ("$output" == "") {
+		print "No output from the command storagepool -list !\n";
+		$state = 'UNKNOWN';
+		exit $states{$state};
+	}
+	print $output . "|" . $perf . "\n";
+	exit $states{$state};
+}
+ 
 # print_help($level, $msg);
 # prints some message and the POD DOC
 sub print_help {
@@ -555,6 +640,7 @@ sub print_help {
 
 	exit( $states{UNKNOWN} );
 }
+
 
 1;
 
@@ -614,6 +700,8 @@ sp   - check the status of the storage processors
 
 disk - check the status of the physical disks attached in the DAE`s
 
+storagepool - check the storage pool utilization
+
 cache - check the status of the read and write cache
 
 faults - Report the different faults on the array
@@ -648,6 +736,14 @@ The port ID to check e.g. 0 or 1 or 0, 1, 2 or 3 for Clariion CX3-80
 
 - if not specified, all ports are checked
 
+=item B<--exclude-port>
+
+The port ID to be excluded from port check
+
+=item B<--exclude-iscsi>
+
+Exclude iSCSI ports
+
 =back
 
 =head4 hbastate
@@ -662,6 +758,20 @@ The node name to check out of navisphere
 
 The number of available FC Paths from the client to the SAN Infrastructure e.g. 2
 
+=back
+
+=head4 storagepool
+
+=over 0
+
+=item B<-w>
+
+Warning value for storage pool utilization
+
+=item B<-c>
+
+Critical value for storage pool utilization
+
 =cut
 
 =back
@@ -675,5 +785,7 @@ $Id: 6a063e85b62db2ea3dabe38628284ea3c4938f3c $
 NETWAYS GmbH, 2008, http://www.netways.de.
 
 Written by Michael Streb <michael.streb@netways.de>.
+
+Modified by Rene Koch <r.koch@ovido.at>.
 
 Please report bugs through the contact of Nagios Exchange, http://www.nagiosexchange.org. 
