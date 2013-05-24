@@ -5,6 +5,7 @@
 #
 # Copyright (C) 2004, 2005 Gerd Mueller / Netways GmbH
 # Modified for USB traffic light by Birger Schmidt / Netways GmbH
+# Modified for HTTPS and clewarecontrol 2.5 support by Rene Koch / ovido gmbh
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -73,19 +74,11 @@ my $device = find_light();
 my $ua = new LWP::UserAgent;
 $ua->agent( "TLightW-Agent/0.1 " . $ua->agent );
 
-my $auth = "";
-
-if ($opt_user) {
-	$opt_url =~ s/http:\/\///;
-
-	$auth = "http://" . $opt_user . ":" . $opt_passwd . "@";
+if (LWP::UserAgent->VERSION >= 6.0){
+  $ua->ssl_opts(verify_hostname => 0, SSL_verify_mode => 0x00);               # disable SSL cert verification
 }
 
-# OLD ...
-#
-my $url =
-  $auth . $opt_url
-  . "/cgi-bin/status.cgi?host=all&type=detail&servicestatustypes=20&serviceprops=42&noheader=1&embedded=1";
+my $url = $opt_url . "/cgi-bin/status.cgi?host=all&type=detail&servicestatustypes=20&serviceprops=42&noheader=1&embedded=1";
 
 $url .= "&hostgroup=" . $opt_hostgroup."&style=all"
   if ( $opt_hostgroup
@@ -95,6 +88,9 @@ $url .= "&servicegroup=" . $opt_servicegroup
   if ( $opt_servicegroup && $opt_servicegroup ne "" );
 
 my $req = new HTTP::Request GET => $url;
+if ($opt_user){
+   $req->authorization_basic($opt_user,$opt_passwd);
+}
 
 my $res = $ua->request($req);
 
@@ -181,11 +177,12 @@ sub print_help {
 	printf "   --debug        show debugging\n";
 #	printf "   --force        ignore current state of bulbs and force on/off (may cause flickering)\n";
 	printf "\n";
-	printf "Requires clewarecontrol v0.8 from http://www.vanheusden.com/clewarecontrol\n";
+	printf "Requires clewarecontrol v2.5 from http://www.vanheusden.com/clewarecontrol\n";
 	printf "DO NOT USE Version 1.0 (it's too slow!)\n";
 	printf "Copyright (C) 2004, 2005 Gerd Mueller / Netways GmbH\n";
-	printf "Modified for USB traffic light by Birger Schmidt / Netways GmbH";
-	printf "Modified again by Davey Jones / Netways GmbH";
+	printf "Modified for USB traffic light by Birger Schmidt / Netways GmbH\n";
+	printf "Modified again by Davey Jones / Netways GmbH\n";
+	printf "Modified for HTTPS and clewarecontrol 2.5 support by Rene Koch / ovido gmbh\n";
 	printf "$PROGNAME comes with ABSOLUTELY NO WARRANTY\n";
 	printf "This program is licensed under the terms of the ";
 	printf "GNU General Public License\n(check source code for details)\n";
@@ -203,20 +200,20 @@ sub switch_bulb {
     # red=0, yellow=1, green=2
     for ( my $i=0; $i < 3; $i++ )
     {
-        $sysoutput = `clewarecontrol -c 1 -b -d $device -rs $i 2>&1`;
+        $sysoutput = `clewarecontrol -c 1 -d $device -rs $i 2>&1`;
         chomp($sysoutput);
         print $COLOURSREV{$i}." is $sysoutput\n" if (defined($debug));
         if ((($sysoutput eq 'On') or $force) and ($i != $colour))
         {
             # switch off
             print "Switching ".$COLOURSREV{$i}." off\n" if (defined($debug));
-            $sysoutput = `clewarecontrol -c 1 -b -d $device -as $i 0 2>&1`;
+            $sysoutput = `clewarecontrol -c 1 -d $device -as $i 0 2>&1`;
         }
         elsif ((($sysoutput eq 'Off') or $force) and ($i == $colour))
         {
             # switch on
             print "Switching ".$COLOURSREV{$i}." on\n" if (defined($debug));
-            $sysoutput = `clewarecontrol -c 1 -b -d $device -as $i 1 2>&1`;
+            $sysoutput = `clewarecontrol -c 1 -d $device -as $i 1 2>&1`;
         }
     }
 }
