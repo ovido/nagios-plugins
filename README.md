@@ -12,12 +12,12 @@ Original script: https://www.netways.org/projects/plugins/files
 
 Changes:
 
-# Changelog:
-# * Fri Dec 7 2012 Rene Koch <r.koch@ovido.at>
-# - added storage pool utilization check (including perfdata)
-# - added exclusion of iSCSI ports
-# - added exclusion of specific ports
-# - fixed error count calculation for FC ports
+ # Changelog:    
+ # * Fri Dec 7 2012 Rene Koch <r.koch@ovido.at>    
+ # - added storage pool utilization check (including perfdata)    
+ # - added exclusion of iSCSI ports    
+ # - added exclusion of specific ports    
+ # - fixed error count calculation for FC ports    
 
 
 check_snmp_brocade
@@ -27,12 +27,12 @@ Original script: http://exchange.nagios.org/directory/Plugins/Hardware/Network-G
 
 Changes:
  
-# - 26 April 2013 Version 3.0.0
-#    - Added support for SNMPv3 (René Koch)
-#    - Changed exit code to 3 (UNKNOWN) if input validation fails
-#
-# - 06 May 2013 Version 3.1.0
-#    - Added warning and critical checks (René Koch)
+ # - 26 April 2013 Version 3.0.0    
+ #    - Added support for SNMPv3 (René Koch)    
+ #    - Changed exit code to 3 (UNKNOWN) if input validation fails    
+ #    
+ # - 06 May 2013 Version 3.1.0   
+ #    - Added warning and critical checks (René Koch)
 
 
 
@@ -44,7 +44,7 @@ Original script: http://exchange.nagios.org/directory/Plugins/Hardware/Network-G
 
 Changes:
 
-# Add performance data output for Cisco switch temperatures
+ # Add performance data output for Cisco switch temperatures    
 
 
 check_usbtlight.pl
@@ -54,5 +54,5 @@ Original script: https://www.netways.org/projects/plugins/files
 
 Changes:
 
-# Modified for HTTPS and clewarecontrol 2.5 support by Rene Koch / ovido gmbh
+ # Modified for HTTPS and clewarecontrol 2.5 support by Rene Koch / ovido gmbh    
 
