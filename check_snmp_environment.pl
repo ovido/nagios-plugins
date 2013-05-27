@@ -755,7 +755,7 @@ if ($tempexist !=0) {
     }
     if (defined($$resultat{$ciscoTempTableValue."." . $tempindex[$i]})) {
       $perf_output.=" '".$$resultat{$ciscoTempTableDesc .".".$tempindex[$i]}."'=" ;
-      $perf_output.=$$resultat{$ciscoTempTableValue."." . $tempindex[$i]};
+      $perf_output.=$$resultat{$ciscoTempTableValue."." . $tempindex[$i]}. ";;;;";
     }
     if ($Nagios_state[$CiscoEnvMonNagios{$cur_status}] ne "OK") {
       $temp_global= 1;
@@ -863,7 +863,11 @@ if ($tempexist !=0) {
 $session->close;
 
 #print $output," : ",$Nagios_state[$global_state]," | ",$perf_output,"\n";
-print $output," : ",$Nagios_state[$global_state],"\n";
+print $output," : ",$Nagios_state[$global_state];
+if (defined $o_perf && $perf_output ne ""){
+  print "| $perf_output";
+}
+print "\n";
 $exit_val=$ERRORS{$Nagios_state[$global_state]};
 
 exit $exit_val;
