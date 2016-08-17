@@ -43,11 +43,11 @@ Original script: http://exchange.nagios.org/directory/Plugins/Hardware/Network-G
 
 Changes:
 
- # Add performance data output for Cisco switch temperatures
- # general: Enable use of Nagios ePN (embedded Perl Nagios)
- # juniper: Hardcoded global box thresholds for mem, temp, CPU
- # juniper: Field Replaceable Units (FRUs) monitoring
- # juniper: Alarms counts (Red, Yellow)
+ # Add performance data output for Cisco switch temperatures    
+ # general: Enable use of Nagios ePN (embedded Perl Nagios)    
+ # juniper: Hardcoded global box thresholds for mem, temp, CPU    
+ # juniper: Field Replaceable Units (FRUs) monitoring    
+ # juniper: Alarms counts (Red, Yellow)    
 
 
 check_usbtlight.pl
