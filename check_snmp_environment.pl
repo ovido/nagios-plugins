@@ -1,9 +1,11 @@
-#!/usr/bin/perl
+#!/usr/bin/perl -w
+# nagios: -epn
 # ============================================================================
 # ============================== INFO ========================================
 # ============================================================================
-# Version	: 0.7
-# Date		: February 21 2011
+# Version	: 0.7.cra
+# Date		: April 29 2015
+# Modified By   : Charles R. Anderson ( cra AT wpi.edu )
 # Author	: Michiel Timmers ( michiel.timmers AT gmx.net)
 # Based on	: "check_snmp_env" plugin (version 1.3) from Patrick Proy
 # Licence 	: GPL - summary below
@@ -89,6 +91,10 @@
 #		- general: Default SNMP version is now SNMPv2c
 #		- general: Switch default SNMPv3 from md5/des to sha/aes
 #		- general: Lots of small fixes
+# ver 0.7.cra : - general: Enable use of Nagios ePN (embedded Perl Nagios)
+#               - juniper: Hardcoded global box thresholds for mem, temp, CPU
+#               - juniper: Field Replaceable Units (FRUs) monitoring
+#               - juniper: Alarms counts (Red, Yellow)
 #
 # ============================================================================
 # ============================== LICENCE =====================================
@@ -117,17 +123,17 @@ use warnings;
 use strict;
 use Net::SNMP;
 use Getopt::Long;
-#use lib "/usr/local/nagios/libexec";
-#use utils qw(%ERRORS $TIMEOUT);
+use lib "/usr/lib64/nagios/plugins";
+use utils qw(%ERRORS $TIMEOUT);
 
 
 # ============================================================================
 # ============================== NAGIOS VARIABLES ============================
 # ============================================================================
 
-my $TIMEOUT 				= 15;	# This is the global script timeout, not the SNMP timeout
-my %ERRORS				= ('OK'=>0,'WARNING'=>1,'CRITICAL'=>2,'UNKNOWN'=>3,'DEPENDENT'=>4);
-my @Nagios_state 			= ("UNKNOWN","OK","WARNING","CRITICAL"); # Nagios states coding
+#our $TIMEOUT 				= 15;	# This is the global script timeout, not the SNMP timeout
+#our %ERRORS				= ('OK'=>0,'WARNING'=>1,'CRITICAL'=>2,'UNKNOWN'=>3,'DEPENDENT'=>4);
+our @Nagios_state 			= ("UNKNOWN","OK","WARNING","CRITICAL"); # Nagios states coding
 
 
 # ============================================================================
@@ -135,238 +141,272 @@ my @Nagios_state 			= ("UNKNOWN","OK","WARNING","CRITICAL"); # Nagios states cod
 # ============================================================================
 
 # System description 
-my $sysdescr				= "1.3.6.1.2.1.1.1.0";			# Global system description
+our $sysdescr				= "1.3.6.1.2.1.1.1.0";			# Global system description
 
 # CISCO-ENVMON-MIB
-my $ciscoEnvMonMIB			= "1.3.6.1.4.1.9.9.13"; 		# Cisco env base table
-my %CiscoEnvMonState 			= (1,"normal",2,"warning",3,"critical",4,"shutdown",5,"notPresent",6,"notFunctioning"); # Cisco states
-my %CiscoEnvMonNagios 			= (1,1 ,2,2 ,3,3 ,4,3 ,5,0, 6,3); 	# Nagios states returned for CIsco states (coded see @Nagios_state).
-my $ciscoVoltageTable 			= $ciscoEnvMonMIB.".1.2.1"; 		# Cisco voltage table
-my $ciscoVoltageTableIndex 		= $ciscoVoltageTable.".1"; 		#Index table
-my $ciscoVoltageTableDesc 		= $ciscoVoltageTable.".2"; 		#Description
-my $ciscoVoltageTableValue 		= $ciscoVoltageTable.".3"; 		#Value
-my $ciscoVoltageTableState 		= $ciscoVoltageTable.".7"; 		#Status
+our $ciscoEnvMonMIB			= "1.3.6.1.4.1.9.9.13"; 		# Cisco env base table
+our %CiscoEnvMonState 			= (1,"normal",2,"warning",3,"critical",4,"shutdown",5,"notPresent",6,"notFunctioning"); # Cisco states
+our %CiscoEnvMonNagios 			= (1,1 ,2,2 ,3,3 ,4,3 ,5,0, 6,3); 	# Nagios states returned for CIsco states (coded see @Nagios_state).
+our $ciscoVoltageTable 			= $ciscoEnvMonMIB.".1.2.1"; 		# Cisco voltage table
+our $ciscoVoltageTableIndex 		= $ciscoVoltageTable.".1"; 		#Index table
+our $ciscoVoltageTableDesc 		= $ciscoVoltageTable.".2"; 		#Description
+our $ciscoVoltageTableValue 		= $ciscoVoltageTable.".3"; 		#Value
+our $ciscoVoltageTableState 		= $ciscoVoltageTable.".7"; 		#Status
 
-my $ciscoTempTable 			= $ciscoEnvMonMIB.".1.3.1"; 		# Cisco temprature table
-my $ciscoTempTableIndex 		= $ciscoTempTable.".1"; 		#Index table
-my $ciscoTempTableDesc 			= $ciscoTempTable.".2"; 		#Description
-my $ciscoTempTableValue 		= $ciscoTempTable.".3"; 		#Value
-my $ciscoTempTableState 		= $ciscoTempTable.".6"; 		#Status
+our $ciscoTempTable 			= $ciscoEnvMonMIB.".1.3.1"; 		# Cisco temprature table
+our $ciscoTempTableIndex 		= $ciscoTempTable.".1"; 		#Index table
+our $ciscoTempTableDesc 			= $ciscoTempTable.".2"; 		#Description
+our $ciscoTempTableValue 		= $ciscoTempTable.".3"; 		#Value
+our $ciscoTempTableThresh 		= $ciscoTempTable.".4"; 		#Threshold
+our $ciscoTempTableState 		= $ciscoTempTable.".6"; 		#Status
 
-my $ciscoFanTable 			= $ciscoEnvMonMIB.".1.4.1"; 		# Cisco fan table
-my $ciscoFanTableIndex 			= $ciscoFanTable.".1"; 			#Index table
-my $ciscoFanTableDesc 			= $ciscoFanTable.".2"; 			#Description
-my $ciscoFanTableState 			= $ciscoFanTable.".3";			#Status
+our $ciscoFanTable 			= $ciscoEnvMonMIB.".1.4.1"; 		# Cisco fan table
+our $ciscoFanTableIndex 			= $ciscoFanTable.".1"; 			#Index table
+our $ciscoFanTableDesc 			= $ciscoFanTable.".2"; 			#Description
+our $ciscoFanTableState 			= $ciscoFanTable.".3";			#Status
 
-my $ciscoPSTable 			= $ciscoEnvMonMIB.".1.5.1";	 	# Cisco power supply table
-my $ciscoPSTableIndex 			= $ciscoPSTable.".1"; 			#Index table
-my $ciscoPSTableDesc			= $ciscoPSTable.".2"; 			#Description
-my $ciscoPSTableState 			= $ciscoPSTable.".3"; 			#Status
+our $ciscoPSTable 			= $ciscoEnvMonMIB.".1.5.1";	 	# Cisco power supply table
+our $ciscoPSTableIndex 			= $ciscoPSTable.".1"; 			#Index table
+our $ciscoPSTableDesc			= $ciscoPSTable.".2"; 			#Description
+our $ciscoPSTableState 			= $ciscoPSTable.".3"; 			#Status
 
 # Nokia env mib 
-my $nokia_temp_tbl			= "1.3.6.1.4.1.94.1.21.1.1.5";
-my $nokia_temp				= "1.3.6.1.4.1.94.1.21.1.1.5.0";
-my $nokia_fan_table			= "1.3.6.1.4.1.94.1.21.1.2";
-my $nokia_fan_status			= "1.3.6.1.4.1.94.1.21.1.2.1.1.2";
-my $nokia_ps_table			= "1.3.6.1.4.1.94.1.21.1.3";
-my $nokia_ps_temp			= "1.3.6.1.4.1.94.1.21.1.3.1.1.2";
-my $nokia_ps_status			= "1.3.6.1.4.1.94.1.21.1.3.1.1.3";
+our $nokia_temp_tbl			= "1.3.6.1.4.1.94.1.21.1.1.5";
+our $nokia_temp				= "1.3.6.1.4.1.94.1.21.1.1.5.0";
+our $nokia_fan_table			= "1.3.6.1.4.1.94.1.21.1.2";
+our $nokia_fan_status			= "1.3.6.1.4.1.94.1.21.1.2.1.1.2";
+our $nokia_ps_table			= "1.3.6.1.4.1.94.1.21.1.3";
+our $nokia_ps_temp			= "1.3.6.1.4.1.94.1.21.1.3.1.1.2";
+our $nokia_ps_status			= "1.3.6.1.4.1.94.1.21.1.3.1.1.3";
 
 # Bluecoat env mib
-my @bc_SensorCode			= ("","ok","unknown","not-installed","voltage-low-warning","voltage-low-critical",
+our @bc_SensorCode			= ("","ok","unknown","not-installed","voltage-low-warning","voltage-low-critical",
 					"no-power","voltage-high-warning","voltage-high-critical","voltage-high-severe",
 					"temperature-high-warning","temperature-high-critical","temperature-high-severe",
 					"fan-slow-warning","fan-slow-critical","fan-stopped"); # BC element status returned by MIB
-my @bc_status_code			= (3,0,3,3,1,2,2,1,2,2,1,2,2,1,2,2); 	# nagios status equivallent to BC status
-my @bc_SensorStatus			= ("","ok","unavailable","nonoperational"); # ok(1),unavailable(2),nonoperational(3)
-my @bc_status_sensor			= (3,0,1,2); 				# nagios status equivallent to BC status
-my @bc_mesure				= ("","","","Enum","volts","celsius","rpm");
-my $bc_sensor_table			= "1.3.6.1.4.1.3417.2.1.1.1.1.1"; 	# sensor table
-my $bc_sensor_Units 			= "1.3.6.1.4.1.3417.2.1.1.1.1.1.3"; 	# cf bc_mesure
-my $bc_sensor_Scale 			= "1.3.6.1.4.1.3417.2.1.1.1.1.1.4"; 	# * 10^value
-my $bc_sensor_Value 			= "1.3.6.1.4.1.3417.2.1.1.1.1.1.5"; 	# value
-my $bc_sensor_Code 			= "1.3.6.1.4.1.3417.2.1.1.1.1.1.6"; 	# bc_SensorCode
-my $bc_sensor_Status 			= "1.3.6.1.4.1.3417.2.1.1.1.1.1.7"; 	# bc_SensorStatus
-my $bc_sensor_Name 			= "1.3.6.1.4.1.3417.2.1.1.1.1.1.9"; 	# name
-my $bc_dsk_table 			= "1.3.6.1.4.1.3417.2.2.1.1.1.1";	# disk table
-my $bc_dsk_status 			= "1.3.6.1.4.1.3417.2.2.1.1.1.1.3"; 	# bc_DiskStatus - present(1), initializing(2), inserted(3), offline(4), removed(5), not-present(6), empty(7), bad(8), unknown(9
-my $bc_dsk_vendor 			= "1.3.6.1.4.1.3417.2.2.1.1.1.1.5"; 	# bc_DiskStatus
-my $bc_dsk_product 			= "1.3.6.1.4.1.3417.2.2.1.1.1.1.6"; 	# bc_DiskStatus
-my $bc_dsk_serial 			= "1.3.6.1.4.1.3417.2.2.1.1.1.1.8"; 	# bc_DiskStatus
-my @bc_DiskStatus			= ("","present","initializing","inserted","offline","removed","not-present","empty","bad","unknown");
-my @bc_dsk_status_nagios		= (3,0,1,1,1,1,0,0,2,3);
+our @bc_status_code			= (3,0,3,3,1,2,2,1,2,2,1,2,2,1,2,2); 	# nagios status equivallent to BC status
+our @bc_SensorStatus			= ("","ok","unavailable","nonoperational"); # ok(1),unavailable(2),nonoperational(3)
+our @bc_status_sensor			= (3,0,1,2); 				# nagios status equivallent to BC status
+our @bc_mesure				= ("","","","Enum","volts","celsius","rpm");
+our $bc_sensor_table			= "1.3.6.1.4.1.3417.2.1.1.1.1.1"; 	# sensor table
+our $bc_sensor_Units 			= "1.3.6.1.4.1.3417.2.1.1.1.1.1.3"; 	# cf bc_mesure
+our $bc_sensor_Scale 			= "1.3.6.1.4.1.3417.2.1.1.1.1.1.4"; 	# * 10^value
+our $bc_sensor_Value 			= "1.3.6.1.4.1.3417.2.1.1.1.1.1.5"; 	# value
+our $bc_sensor_Code 			= "1.3.6.1.4.1.3417.2.1.1.1.1.1.6"; 	# bc_SensorCode
+our $bc_sensor_Status 			= "1.3.6.1.4.1.3417.2.1.1.1.1.1.7"; 	# bc_SensorStatus
+our $bc_sensor_Name 			= "1.3.6.1.4.1.3417.2.1.1.1.1.1.9"; 	# name
+our $bc_dsk_table 			= "1.3.6.1.4.1.3417.2.2.1.1.1.1";	# disk table
+our $bc_dsk_status 			= "1.3.6.1.4.1.3417.2.2.1.1.1.1.3"; 	# bc_DiskStatus - present(1), initializing(2), inserted(3), offline(4), removed(5), not-present(6), empty(7), bad(8), unknown(9
+our $bc_dsk_vendor 			= "1.3.6.1.4.1.3417.2.2.1.1.1.1.5"; 	# bc_DiskStatus
+our $bc_dsk_product 			= "1.3.6.1.4.1.3417.2.2.1.1.1.1.6"; 	# bc_DiskStatus
+our $bc_dsk_serial 			= "1.3.6.1.4.1.3417.2.2.1.1.1.1.8"; 	# bc_DiskStatus
+our @bc_DiskStatus			= ("","present","initializing","inserted","offline","removed","not-present","empty","bad","unknown");
+our @bc_dsk_status_nagios		= (3,0,1,1,1,1,0,0,2,3);
 		
 # Iron Port env mib
-my $iron_ps_table 			= "1.3.6.1.4.1.15497.1.1.1.8"; 		# power-supply table
-my $iron_ps_status 			= "1.3.6.1.4.1.15497.1.1.1.8.1.2"; 	#powerSupplyNotInstalled(1), powerSupplyHealthy(2), powerSupplyNoAC(3), powerSupplyFaulty(4)
-my @iron_ps_status_name			= ("","powerSupplyNotInstalled","powerSupplyHealthy","powerSupplyNoAC","powerSupplyFaulty");
-my @iron_ps_status_nagios		= (3,3,0,2,2);
-my $iron_ps_ha 				= "1.3.6.1.4.1.15497.1.1.1.8.1.3"; 	# ps redundancy status- powerSupplyRedundancyOK(1), powerSupplyRedundancyLost(2)
-my @iron_ps_ha_name			= ("","powerSupplyRedundancyOK","powerSupplyRedundancyLost");
-my @iron_ps_ha_nagios			= (3,0,1);
-my $iron_ps_name 			= "1.3.6.1.4.1.15497.1.1.1.8.1.4"; 	# ps name
-my $iron_tmp_table			= "1.3.6.1.4.1.15497.1.1.1.9"; 		# temp table
-my $iron_tmp_celcius			= "1.3.6.1.4.1.15497.1.1.1.9.1.2"; 	# temp in celcius
-my $iron_tmp_name			= "1.3.6.1.4.1.15497.1.1.1.9.1.3"; 	# name
-my $iron_fan_table			= "1.3.6.1.4.1.15497.1.1.1.10"; 	# fan table
-my $iron_fan_rpm			= "1.3.6.1.4.1.15497.1.1.1.10.1.2"; 	# fan speed in RPM
-my $iron_fan_name			= "1.3.6.1.4.1.15497.1.1.1.10.1.3"; 	# fan name
+our $iron_ps_table 			= "1.3.6.1.4.1.15497.1.1.1.8"; 		# power-supply table
+our $iron_ps_status 			= "1.3.6.1.4.1.15497.1.1.1.8.1.2"; 	#powerSupplyNotInstalled(1), powerSupplyHealthy(2), powerSupplyNoAC(3), powerSupplyFaulty(4)
+our @iron_ps_status_name			= ("","powerSupplyNotInstalled","powerSupplyHealthy","powerSupplyNoAC","powerSupplyFaulty");
+our @iron_ps_status_nagios		= (3,3,0,2,2);
+our $iron_ps_ha 				= "1.3.6.1.4.1.15497.1.1.1.8.1.3"; 	# ps redundancy status- powerSupplyRedundancyOK(1), powerSupplyRedundancyLost(2)
+our @iron_ps_ha_name			= ("","powerSupplyRedundancyOK","powerSupplyRedundancyLost");
+our @iron_ps_ha_nagios			= (3,0,1);
+our $iron_ps_name 			= "1.3.6.1.4.1.15497.1.1.1.8.1.4"; 	# ps name
+our $iron_tmp_table			= "1.3.6.1.4.1.15497.1.1.1.9"; 		# temp table
+our $iron_tmp_celcius			= "1.3.6.1.4.1.15497.1.1.1.9.1.2"; 	# temp in celcius
+our $iron_tmp_name			= "1.3.6.1.4.1.15497.1.1.1.9.1.3"; 	# name
+our $iron_fan_table			= "1.3.6.1.4.1.15497.1.1.1.10"; 	# fan table
+our $iron_fan_rpm			= "1.3.6.1.4.1.15497.1.1.1.10.1.2"; 	# fan speed in RPM
+our $iron_fan_name			= "1.3.6.1.4.1.15497.1.1.1.10.1.3"; 	# fan name
 
 # Foundry BigIron Router Switch (FOUNDRY-SN-AGENT-MIB)
-my $foundry_temp 			= "1.3.6.1.4.1.1991.1.1.1.1.18.0"; 	# Chassis temperature in Deg C *2
-my $foundry_temp_warn 			= "1.3.6.1.4.1.1991.1.1.1.1.19.0"; 	# Chassis warn temperature in Deg C *2
-my $foundry_temp_crit 			= "1.3.6.1.4.1.1991.1.1.1.1.20.0"; 	# Chassis warn temperature in Deg C *2
-my $foundry_ps_table			= "1.3.6.1.4.1.1991.1.1.1.2.1"; 	# PS table
-my $foundry_ps_desc			= "1.3.6.1.4.1.1991.1.1.1.2.1.1.2"; 	# PS desc
-my $foundry_ps_status			= "1.3.6.1.4.1.1991.1.1.1.2.1.1.3"; 	# PS status
-my $foundry_fan_table			= "1.3.6.1.4.1.1991.1.1.1.3.1"; 	# FAN table
-my $foundry_fan_desc			= "1.3.6.1.4.1.1991.1.1.1.3.1.1.2"; 	# FAN desc
-my $foundry_fan_status			= "1.3.6.1.4.1.1991.1.1.1.3.1.1.3"; 	# FAN status
-my @foundry_status 			= (3,0,2); 				# oper status : 1:other, 2: Normal, 3: Failure 
+our $foundry_temp 			= "1.3.6.1.4.1.1991.1.1.1.1.18.0"; 	# Chassis temperature in Deg C *2
+our $foundry_temp_warn 			= "1.3.6.1.4.1.1991.1.1.1.1.19.0"; 	# Chassis warn temperature in Deg C *2
+our $foundry_temp_crit 			= "1.3.6.1.4.1.1991.1.1.1.1.20.0"; 	# Chassis warn temperature in Deg C *2
+our $foundry_ps_table			= "1.3.6.1.4.1.1991.1.1.1.2.1"; 	# PS table
+our $foundry_ps_desc			= "1.3.6.1.4.1.1991.1.1.1.2.1.1.2"; 	# PS desc
+our $foundry_ps_status			= "1.3.6.1.4.1.1991.1.1.1.2.1.1.3"; 	# PS status
+our $foundry_fan_table			= "1.3.6.1.4.1.1991.1.1.1.3.1"; 	# FAN table
+our $foundry_fan_desc			= "1.3.6.1.4.1.1991.1.1.1.3.1.1.2"; 	# FAN desc
+our $foundry_fan_status			= "1.3.6.1.4.1.1991.1.1.1.3.1.1.3"; 	# FAN status
+our @foundry_status 			= (3,0,2); 				# oper status : 1:other, 2: Normal, 3: Failure 
 
 # lm-sensors
-my $linux_env_table 			= "1.3.6.1.4.1.2021.13.16"; 		# Global env table
-my $linux_temp				= "1.3.6.1.4.1.2021.13.16.2.1"; 	# temperature table
-my $linux_temp_descr			= "1.3.6.1.4.1.2021.13.16.2.1.2"; 	# temperature entry description
-my $linux_temp_value			= "1.3.6.1.4.1.2021.13.16.2.1.3"; 	# temperature entry value (mC)
-my $linux_fan				= "1.3.6.1.4.1.2021.13.16.3.1"; 	# fan table
-my $linux_fan_descr			= "1.3.6.1.4.1.2021.13.16.3.1.2"; 	# fan entry description
-my $linux_fan_value			= "1.3.6.1.4.1.2021.13.16.3.1.3"; 	# fan entry value (RPM)
-my $linux_volt				= "1.3.6.1.4.1.2021.13.16.4.1"; 	# voltage table
-my $linux_volt_descr			= "1.3.6.1.4.1.2021.13.16.4.1.2"; 	# voltage entry description
-my $linux_volt_value			= "1.3.6.1.4.1.2021.13.16.4.1.3"; 	# voltage entry value (mV)
-my $linux_misc				= "1.3.6.1.4.1.2021.13.16.5.1"; 	# misc table
-my $linux_misc_descr			= "1.3.6.1.4.1.2021.13.16.5.1.2"; 	# misc entry description
-my $linux_misc_value			= "1.3.6.1.4.1.2021.13.16.5.1.3"; 	# misc entry value
+our $linux_env_table 			= "1.3.6.1.4.1.2021.13.16"; 		# Global env table
+our $linux_temp				= "1.3.6.1.4.1.2021.13.16.2.1"; 	# temperature table
+our $linux_temp_descr			= "1.3.6.1.4.1.2021.13.16.2.1.2"; 	# temperature entry description
+our $linux_temp_value			= "1.3.6.1.4.1.2021.13.16.2.1.3"; 	# temperature entry value (mC)
+our $linux_fan				= "1.3.6.1.4.1.2021.13.16.3.1"; 	# fan table
+our $linux_fan_descr			= "1.3.6.1.4.1.2021.13.16.3.1.2"; 	# fan entry description
+our $linux_fan_value			= "1.3.6.1.4.1.2021.13.16.3.1.3"; 	# fan entry value (RPM)
+our $linux_volt				= "1.3.6.1.4.1.2021.13.16.4.1"; 	# voltage table
+our $linux_volt_descr			= "1.3.6.1.4.1.2021.13.16.4.1.2"; 	# voltage entry description
+our $linux_volt_value			= "1.3.6.1.4.1.2021.13.16.4.1.3"; 	# voltage entry value (mV)
+our $linux_misc				= "1.3.6.1.4.1.2021.13.16.5.1"; 	# misc table
+our $linux_misc_descr			= "1.3.6.1.4.1.2021.13.16.5.1.2"; 	# misc entry description
+our $linux_misc_value			= "1.3.6.1.4.1.2021.13.16.5.1.3"; 	# misc entry value
 
 # Cisco switches (catalys & IOS)
-my $cisco_chassis_card_descr		= "1.3.6.1.4.1.9.3.6.11.1.3"; 		# Chassis card description
-my $cisco_chassis_card_slot		= "1.3.6.1.4.1.9.3.6.11.1.7"; 		# Chassis card slot number
-my $cisco_chassis_card_state		= "1.3.6.1.4.1.9.3.6.11.1.9"; 		# operating status of card - 1 : Not specified, 2 : Up, 3: Down, 4 : standby
-my @cisco_chassis_card_status_text 	= ("Unknown","Not specified","Up","Down","Standby");
-my @cisco_chassis_card_status 		= (2,2,0,2,0);
-my $cisco_module_descr			= "1.3.6.1.2.1.47.1.1.1.1.13"; 		# Chassis card description
-my $cisco_module_slot			= "1.3.6.1.4.1.9.5.1.3.1.1.25"; 	# Chassis card slot number
-my $cisco_module_state			= "1.3.6.1.4.1.9.9.117.1.2.1.1.2"; 	# operating status of card - 	1:unknown, 2:ok, 3:disabled, 4:okButDiagFailed, 5:boot, 6:selfTest, 7:failed, 8:missing, 9:mismatchWithParent, 	
+our $cisco_chassis_card_descr		= "1.3.6.1.4.1.9.3.6.11.1.3"; 		# Chassis card description
+our $cisco_chassis_card_slot		= "1.3.6.1.4.1.9.3.6.11.1.7"; 		# Chassis card slot number
+our $cisco_chassis_card_state		= "1.3.6.1.4.1.9.3.6.11.1.9"; 		# operating status of card - 1 : Not specified, 2 : Up, 3: Down, 4 : standby
+our @cisco_chassis_card_status_text 	= ("Unknown","Not specified","Up","Down","Standby");
+our @cisco_chassis_card_status 		= (2,2,0,2,0);
+our $cisco_module_descr			= "1.3.6.1.2.1.47.1.1.1.1.13"; 		# Chassis card description
+our $cisco_module_slot			= "1.3.6.1.4.1.9.5.1.3.1.1.25"; 	# Chassis card slot number
+our $cisco_module_state			= "1.3.6.1.4.1.9.9.117.1.2.1.1.2"; 	# operating status of card - 	1:unknown, 2:ok, 3:disabled, 4:okButDiagFailed, 5:boot, 6:selfTest, 7:failed, 8:missing, 9:mismatchWithParent, 	
 										#				10:mismatchConfig, 11:diagFailed, 12:dormant, 13:outOfServiceAdmin, 14:outOfServiceEnvTemp, 15:poweredDown, 16:poweredUp, 
 										#				17:powerDenied, 18:powerCycled, 19:okButPowerOverWarning, 20:okButPowerOverCritical, 21:syncInProgress
-my @cisco_module_status_text 		=("Unknown", "unknown", "OK", "Disabled", "OkButDiagFailed", "Boot", 
+our @cisco_module_status_text 		=("Unknown", "unknown", "OK", "Disabled", "OkButDiagFailed", "Boot", 
 					"SelfTest", "Failed", "Missing", "MismatchWithParent", "MismatchConfig", 
 					"DiagFailed", "Dormant", "OutOfServiceAdmin", "OutOfServiceEnvTemp", "PoweredDown", 
 					"PoweredUp", "PowerDenied", "PowerCycled", "OkButPowerOverWarning", 
 					"OkButPowerOverCritical", "SyncInProgress");
-my @cisco_module_status 		= (3,3,0,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2);
+our @cisco_module_status 		= (3,3,0,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2);
 
 # Juniper routers (JUNOS)
-my $juniper_operating_descr		= "1.3.6.1.4.1.2636.3.1.13.1.5"; 	# Component description
-my $juniper_operating_state		= "1.3.6.1.4.1.2636.3.1.13.1.6"; 	# Operating status of component-  Unknown(1), Running(2), Ready(3), Reset(4), RunningAtFullSpeed(5), Down(6), Standby(7)
-my @juniper_operating_status_text 	= ("--Invalid--","Unknown","Running","Ready","Reset","RunningAtFullSpeed","Down","Standby");
-my @juniper_operating_status	 	= (3,3,0,0,1,0,2,0);
+# Box State
+our $juniper_kernel_mem_used            = "1.3.6.1.4.1.2636.3.1.16.0";		# Kernel memory used percentage
+# Alarm State
+our $juniper_alarm_yellow_state		= "1.3.6.1.4.1.2636.3.4.2.2.1.0";	# JUNIPER-ALARM-MIB::jnxYellowAlarmState.0 = INTEGER: other(1) off(2) on(3)
+our $juniper_alarm_yellow_count		= "1.3.6.1.4.1.2636.3.4.2.2.2.0";	# JUNIPER-ALARM-MIB::jnxYellowAlarmCount.0 = Gauge32: 0
+our $juniper_alarm_red_state		= "1.3.6.1.4.1.2636.3.4.2.3.1.0";	# JUNIPER-ALARM-MIB::jnxRedAlarmState.0 = INTEGER: other(1) off(2) on(3)
+our $juniper_alarm_red_count		= "1.3.6.1.4.1.2636.3.4.2.3.2.0";	# JUNIPER-ALARM-MIB::jnxRedAlarmCount.0 = Gauge32: 0
+# Component Operating State
+our $juniper_operating_descr		= "1.3.6.1.4.1.2636.3.1.13.1.5"; 	# Component description
+our $juniper_operating_state		= "1.3.6.1.4.1.2636.3.1.13.1.6"; 	# Operating status of component
+our @juniper_operating_status_text 	= ("--Invalid--","Unknown","Running","Ready","Reset","RunningAtFullSpeed","Down","Standby");
+our @juniper_operating_status	 	= (3,3,0,0,1,0,2,0);			# Nagios status mapping for each state above
+our $juniper_operating_temp		= "1.3.6.1.4.1.2636.3.1.13.1.7"; 	# Temperature of component in Celsius
+our $juniper_operating_cpu		= "1.3.6.1.4.1.2636.3.1.13.1.8"; 	# CPU utilization in percentage of this component
+our $juniper_operating_isr		= "1.3.6.1.4.1.2636.3.1.13.1.9"; 	# CPU utilization in percentage spent in Interrupt Service Routine
+our $juniper_operating_buffer		= "1.3.6.1.4.1.2636.3.1.13.1.11"; 	# Buffer pool utilization in percentage of this component
+our $juniper_operating_heap		= "1.3.6.1.4.1.2636.3.1.13.1.12"; 	# Heap utilization in percentage of this component
+our $juniper_operating_1min_load	= "1.3.6.1.4.1.2636.3.1.13.1.20"; 	# CPU Load Average over the last 1 minute
+our $juniper_operating_5min_load	= "1.3.6.1.4.1.2636.3.1.13.1.21"; 	# CPU Load Average over the last 5 minutes
+our $juniper_operating_15min_load	= "1.3.6.1.4.1.2636.3.1.13.1.22"; 	# CPU Load Average over the last 15 minutes
+# FRU State
+our $juniper_fru_name			= "1.3.6.1.4.1.2636.3.1.15.1.5";	# Name of Field Replaceable Unit
+our $juniper_fru_state			= "1.3.6.1.4.1.2636.3.1.15.1.8";	# Operating status of FRU
+our @juniper_fru_status_text		= ("--Invalid--","Unknown","Empty","Present","Ready","AnnounceOnline","Online","AnnounceOffline","Offline","Diagnostics","Standby");
+our @juniper_fru_status			= (3,3,0,1,1,1,0,1,2,2,0);		# Nagios status mapping for each state above
+our $juniper_fru_temp			= "1.3.6.1.4.1.2636.3.1.15.1.9";	# Temperature of FRU in Celsius
+# Juniper hardcoded thresholds
+our $juniper_thresh_kernel_mem		= 80;
+our $juniper_thresh_temp		= 62;
+our $juniper_thresh_cpu			= 200; # disable CPU threshold reporting by making it higher than 100%
+our $juniper_thresh_isr			= 50;
+our $juniper_thresh_buffer		= 80;
+our $juniper_thresh_heap		= 70;
+our $juniper_thresh_1min_load		= 500;
+our $juniper_thresh_5min_load		= 400;
+our $juniper_thresh_15min_load		= 350;
+
 
 # Extreme switches
-my $extreme_slot_table			= "1.3.6.1.4.1.1916.1.1.2.2.1"; 
-my $extreme_slot_name			= "1.3.6.1.4.1.1916.1.1.2.2.1.2"; 	# Component description
-my $extreme_slot_state			= "1.3.6.1.4.1.1916.1.1.2.2.1.5"; 	# Operating status of component - NotPresent(1), testing(2), mismatch(3), failed(4), operational(5), powerdown(6), unknown(7)
-my $extreme_slot_serialnumber		= "1.3.6.1.4.1.1916.1.1.2.2.1.6";
-my @extreme_slot_state_text		= ("--Invalid--","NotPresent","Testing","Mismatch","Failed","Operational","Powerdown","Unknown");
-my @extreme_slot_nagios 		= (3,0,2,2,2,0,2,3);
-my $extreme_ps_table			= "1.3.6.1.4.1.1916.1.1.1.27.1";
-my $extreme_ps_status			= "1.3.6.1.4.1.1916.1.1.1.27.1.2";
-my @extreme_ps_status_text		= ("--Invalid--","notPresent","presentOK","presentNotOK");
-my @extreme_ps_nagios		 	= (3,1,0,2);
-my $extreme_fan_table			= "1.3.6.1.4.1.1916.1.1.1.9.1";
-my $extreme_fan_number			= "1.3.6.1.4.1.1916.1.1.1.9.1.1";
-my $extreme_fan_operational		= "1.3.6.1.4.1.1916.1.1.1.9.1.2";
-my @extreme_fan_operational_text	= ("--Invalid--","Operational","Not operational");
-my @extreme_fan_nagios		 	= (3,0,2);
-my $extreme_temperature_alarm		= "1.3.6.1.4.1.1916.1.1.1.7.0";
-my @extreme_temperature_alarm_text	= ("--Invalid--","OverTemperature","OK");
-my @extreme_temperature_nagios		= (3,2,0);
-my $extreme_temperature_current		= "1.3.6.1.4.1.1916.1.1.1.8.0";
+our $extreme_slot_table			= "1.3.6.1.4.1.1916.1.1.2.2.1"; 
+our $extreme_slot_name			= "1.3.6.1.4.1.1916.1.1.2.2.1.2"; 	# Component description
+our $extreme_slot_state			= "1.3.6.1.4.1.1916.1.1.2.2.1.5"; 	# Operating status of component - NotPresent(1), testing(2), mismatch(3), failed(4), operational(5), powerdown(6), unknown(7)
+our $extreme_slot_serialnumber		= "1.3.6.1.4.1.1916.1.1.2.2.1.6";
+our @extreme_slot_state_text		= ("--Invalid--","NotPresent","Testing","Mismatch","Failed","Operational","Powerdown","Unknown");
+our @extreme_slot_nagios 		= (3,0,2,2,2,0,2,3);
+our $extreme_ps_table			= "1.3.6.1.4.1.1916.1.1.1.27.1";
+our $extreme_ps_status			= "1.3.6.1.4.1.1916.1.1.1.27.1.2";
+our @extreme_ps_status_text		= ("--Invalid--","notPresent","presentOK","presentNotOK");
+our @extreme_ps_nagios		 	= (3,1,0,2);
+our $extreme_fan_table			= "1.3.6.1.4.1.1916.1.1.1.9.1";
+our $extreme_fan_number			= "1.3.6.1.4.1.1916.1.1.1.9.1.1";
+our $extreme_fan_operational		= "1.3.6.1.4.1.1916.1.1.1.9.1.2";
+our @extreme_fan_operational_text	= ("--Invalid--","Operational","Not operational");
+our @extreme_fan_nagios		 	= (3,0,2);
+our $extreme_temperature_alarm		= "1.3.6.1.4.1.1916.1.1.1.7.0";
+our @extreme_temperature_alarm_text	= ("--Invalid--","OverTemperature","OK");
+our @extreme_temperature_nagios		= (3,2,0);
+our $extreme_temperature_current		= "1.3.6.1.4.1.1916.1.1.1.8.0";
 
 
 # HP ProCurve switches
-my $procurve_operating_descr    	= "1.3.6.1.4.1.11.2.14.11.1.2.6.1.7"; 	# Component description
-my $procurve_operating_state    	= "1.3.6.1.4.1.11.2.14.11.1.2.6.1.4"; 	# Operating status of component - Unknown(1), Bad(2), Warning(3), Good(4), NotPresent(5)
-my @procurve_operating_status_text 	= ("--Invalid--","Unknown","Bad","Warning","Good","NotPresent");
-my @procurve_operating_status 		= (3,3,2,1,0,4);
+our $procurve_operating_descr    	= "1.3.6.1.4.1.11.2.14.11.1.2.6.1.7"; 	# Component description
+our $procurve_operating_state    	= "1.3.6.1.4.1.11.2.14.11.1.2.6.1.4"; 	# Operating status of component - Unknown(1), Bad(2), Warning(3), Good(4), NotPresent(5)
+our @procurve_operating_status_text 	= ("--Invalid--","Unknown","Bad","Warning","Good","NotPresent");
+our @procurve_operating_status 		= (3,3,2,1,0,4);
 
 # Netscreen
-my $netscreen_slot_operating_descr     = "1.3.6.1.4.1.3224.21.5.1.2"; 		# Component description
-my $netscreen_slot_operating_state     = "1.3.6.1.4.1.3224.21.5.1.3"; 		# Operating status of component - Fail?(0), Good(1)
-my @netscreen_slot_operating_status_text = ("Fail","Good");
-my @netscreen_slot_operating_status 	= (2,0);
-my $netscreen_power_operating_descr     = "1.3.6.1.4.1.3224.21.1.1.3"; 		# Component description
-my $netscreen_power_operating_state     = "1.3.6.1.4.1.3224.21.1.1.2"; 		# Operating status of component - Fail(0), Good(1)
-my @netscreen_power_operating_status_text = ("Fail","Good");
-my @netscreen_power_operating_status	= (2,0);
-my $netscreen_fan_operating_descr     	= "1.3.6.1.4.1.3224.21.2.1.3";		# Component description
-my $netscreen_fan_operating_state     	= "1.3.6.1.4.1.3224.21.2.1.2"; 		# Operating status of component - Fail(0), Good(1), Not Installed(2)
-my @netscreen_fan_operating_status_text = ("Fail","Good","Not Installed");
-my @netscreen_fan_operating_status 	= (2,0,4);
+our $netscreen_slot_operating_descr     = "1.3.6.1.4.1.3224.21.5.1.2"; 		# Component description
+our $netscreen_slot_operating_state     = "1.3.6.1.4.1.3224.21.5.1.3"; 		# Operating status of component - Fail?(0), Good(1)
+our @netscreen_slot_operating_status_text = ("Fail","Good");
+our @netscreen_slot_operating_status 	= (2,0);
+our $netscreen_power_operating_descr     = "1.3.6.1.4.1.3224.21.1.1.3"; 		# Component description
+our $netscreen_power_operating_state     = "1.3.6.1.4.1.3224.21.1.1.2"; 		# Operating status of component - Fail(0), Good(1)
+our @netscreen_power_operating_status_text = ("Fail","Good");
+our @netscreen_power_operating_status	= (2,0);
+our $netscreen_fan_operating_descr     	= "1.3.6.1.4.1.3224.21.2.1.3";		# Component description
+our $netscreen_fan_operating_state     	= "1.3.6.1.4.1.3224.21.2.1.2"; 		# Operating status of component - Fail(0), Good(1), Not Installed(2)
+our @netscreen_fan_operating_status_text = ("Fail","Good","Not Installed");
+our @netscreen_fan_operating_status 	= (2,0,4);
 
 # Cisco CISCO-ENTITY-SENSOR-MIB
-my $cisco_ios_xe_physicaldescr	    	= "1.3.6.1.2.1.47.1.1.1.1.7";
-my $cisco_ios_xe_type     	    	= "1.3.6.1.4.1.9.9.91.1.1.1.1.1"; 
-my @cisco_ios_xe_type_text	    	= ("not_specified","other","unknown","voltsAC","voltsDC","amperes","watts","hertz","celsius","percent","rpm","cmm","truthvalue","specialEnum","dBm");
-my $cisco_ios_xe_scale     	    	= "1.3.6.1.4.1.9.9.91.1.1.1.1.2"; 
-my @cisco_ios_xe_scale_power        	= ("0","-24","-21","-18","-15","12","e-9","e-6","e-3","e0","e3","e6","9","12","15","18","21","24"); 
-my $cisco_ios_xe_precision	  	= "1.3.6.1.4.1.9.9.91.1.1.1.1.3"; 
-my $cisco_ios_xe_value     	    	= "1.3.6.1.4.1.9.9.91.1.1.1.1.4"; 
-my $cisco_ios_xe_status     	 	= "1.3.6.1.4.1.9.9.91.1.1.1.1.5"; 
-my @cisco_ios_xe_operating_text		= ("--Invalid--","ok","unavailable","nonoperational");
-my @cisco_ios_xe_operating_status   	= (0,1,2,3);
-my $cisco_ios_xe_threshold_severity	= "1.3.6.1.4.1.9.9.91.1.2.1.1.2";
-my $cisco_ios_xe_threshold_value    	= "1.3.6.1.4.1.9.9.91.1.2.1.1.4";
+our $cisco_ios_xe_physicaldescr	    	= "1.3.6.1.2.1.47.1.1.1.1.7";
+our $cisco_ios_xe_type     	    	= "1.3.6.1.4.1.9.9.91.1.1.1.1.1"; 
+our @cisco_ios_xe_type_text	    	= ("not_specified","other","unknown","voltsAC","voltsDC","amperes","watts","hertz","celsius","percent","rpm","cmm","truthvalue","specialEnum","dBm");
+our $cisco_ios_xe_scale     	    	= "1.3.6.1.4.1.9.9.91.1.1.1.1.2"; 
+our @cisco_ios_xe_scale_power        	= ("0","-24","-21","-18","-15","12","e-9","e-6","e-3","e0","e3","e6","9","12","15","18","21","24"); 
+our $cisco_ios_xe_precision	  	= "1.3.6.1.4.1.9.9.91.1.1.1.1.3"; 
+our $cisco_ios_xe_value     	    	= "1.3.6.1.4.1.9.9.91.1.1.1.1.4"; 
+our $cisco_ios_xe_status     	 	= "1.3.6.1.4.1.9.9.91.1.1.1.1.5"; 
+our @cisco_ios_xe_operating_text		= ("--Invalid--","ok","unavailable","nonoperational");
+our @cisco_ios_xe_operating_status   	= (0,1,2,3);
+our $cisco_ios_xe_threshold_severity	= "1.3.6.1.4.1.9.9.91.1.2.1.1.2";
+our $cisco_ios_xe_threshold_value    	= "1.3.6.1.4.1.9.9.91.1.2.1.1.4";
 
 # Citrix NetScaler
-my $citrix_desc     			= "1.3.6.1.4.1.5951.4.1.1.41.7.1.1"; 
-my $citrix_value     			= "1.3.6.1.4.1.5951.4.1.1.41.7.1.2"; 
-my $citrix_high_availability_state     	= "1.3.6.1.4.1.5951.4.1.1.23.24.0"; 
-my @citrix_high_availability_state_text	= ("unknown","init","down","up","partialFail","monitorFail","monitorOk","completeFail","dumb","disabled","partialFailSsl","routemonitorFail");
-my $citrix_ssl_engine_state     	= "1.3.6.1.4.1.5951.4.1.1.47.2.0"; 
-my @citrix_ssl_engine_state_text	= ("down","up");
+our $citrix_desc     			= "1.3.6.1.4.1.5951.4.1.1.41.7.1.1"; 
+our $citrix_value     			= "1.3.6.1.4.1.5951.4.1.1.41.7.1.2"; 
+our $citrix_high_availability_state     	= "1.3.6.1.4.1.5951.4.1.1.23.24.0"; 
+our @citrix_high_availability_state_text	= ("unknown","init","down","up","partialFail","monitorFail","monitorOk","completeFail","dumb","disabled","partialFailSsl","routemonitorFail");
+our $citrix_ssl_engine_state     	= "1.3.6.1.4.1.5951.4.1.1.47.2.0"; 
+our @citrix_ssl_engine_state_text	= ("down","up");
 
 # Transmode WDM MIB/OID
-my $transmode_table			= "1.3.6.1.4.1.11857.1.1.3.2.1"; 	# Alarm Active Entry table
-my $transmode_alarm_rack                = "1.3.6.1.4.1.11857.1.1.3.2.1.2"; 	# Non Acked Alarm rack
-my $transmode_alarm_slot                = "1.3.6.1.4.1.11857.1.1.3.2.1.3"; 	# Non Acked Alarm slot
-my $transmode_alarm_descr               = "1.3.6.1.4.1.11857.1.1.3.2.1.4"; 	# Non Acked Alarm description
-my $transmode_alarm_sev                 = "1.3.6.1.4.1.11857.1.1.3.2.1.5"; 	# Non Acked Alarm severity
-my $transmode_alarm_unit                = "1.3.6.1.4.1.11857.1.1.3.2.1.6"; 	# Non Acked Alarm unit
-my $transmode_alarm_serial              = "1.3.6.1.4.1.11857.1.1.3.2.1.7"; 	# Non Acked Alarm serial
-my $transmode_alarm_time_start          = "1.3.6.1.4.1.11857.1.1.3.2.1.8"; 	# Time of Alarm Start
-my $transmode_alarm_time_end            = "1.3.6.1.4.1.11857.1.1.3.2.1.9"; 	# Time of Alarm End
-my @transmode_alarm_status_text         = ("Indeterminate","Critical","Major","Minor","Warning");
-my @transmode_alarm_status              = (1,2,2,1,1);
+our $transmode_table			= "1.3.6.1.4.1.11857.1.1.3.2.1"; 	# Alarm Active Entry table
+our $transmode_alarm_rack                = "1.3.6.1.4.1.11857.1.1.3.2.1.2"; 	# Non Acked Alarm rack
+our $transmode_alarm_slot                = "1.3.6.1.4.1.11857.1.1.3.2.1.3"; 	# Non Acked Alarm slot
+our $transmode_alarm_descr               = "1.3.6.1.4.1.11857.1.1.3.2.1.4"; 	# Non Acked Alarm description
+our $transmode_alarm_sev                 = "1.3.6.1.4.1.11857.1.1.3.2.1.5"; 	# Non Acked Alarm severity
+our $transmode_alarm_unit                = "1.3.6.1.4.1.11857.1.1.3.2.1.6"; 	# Non Acked Alarm unit
+our $transmode_alarm_serial              = "1.3.6.1.4.1.11857.1.1.3.2.1.7"; 	# Non Acked Alarm serial
+our $transmode_alarm_time_start          = "1.3.6.1.4.1.11857.1.1.3.2.1.8"; 	# Time of Alarm Start
+our $transmode_alarm_time_end            = "1.3.6.1.4.1.11857.1.1.3.2.1.9"; 	# Time of Alarm End
+our @transmode_alarm_status_text         = ("Indeterminate","Critical","Major","Minor","Warning");
+our @transmode_alarm_status              = (1,2,2,1,1);
 
 
 # ============================================================================
 # ============================== GLOBAL VARIABLES ============================
 # ============================================================================
 
-my $Version		= '0.7';	# Version number of this script
-my $o_host		= undef; 	# Hostname
-my $o_community 	= undef; 	# Community
-my $o_port	 	= 161; 		# Port
-my $o_help		= undef; 	# Want some help ?
-my $o_verb		= undef;	# Verbose mode
-my $o_version		= undef;	# Print version
-my $o_timeout		= undef; 	# Timeout (Default 5)
-my $o_perf		= undef;	# Output performance data
-my $o_version1		= undef;	# Use SNMPv1
-my $o_version2		= undef;	# Use SNMPv2c
-my $o_domain		= undef;	# Use IPv6
-my $o_check_type	= "cisco";	# Default check is "cisco"
-my @valid_types		= ("cisco","nokia","bc","iron","foundry","linux","ciscoSW","extremeSW","juniper","procurve","netscreen","ciscoNEW","citrix","transmode");	
-my $o_temp		= undef;	# Max temp
-my $o_fan		= undef;	# Min fan speed
-my $o_login		= undef;	# Login for SNMPv3
-my $o_passwd		= undef;	# Pass for SNMPv3
-my $v3protocols		= undef;	# V3 protocol list.
-my $o_authproto		= 'sha';	# Auth protocol
-my $o_privproto		= 'aes';	# Priv protocol
-my $o_privpass		= undef;	# priv password
+our $Version		= '0.7.cra';	# Version number of this script
+our $o_host		= undef; 	# Hostname
+our $o_community 	= undef; 	# Community
+our $o_port	 	= 161; 		# Port
+our $o_help		= undef; 	# Want some help ?
+our $o_verb		= undef;	# Verbose mode
+our $o_version		= undef;	# Print version
+our $o_timeout		= undef; 	# Timeout (Default 5)
+our $o_perf		= undef;	# Output performance data
+our $o_version1		= undef;	# Use SNMPv1
+our $o_version2		= undef;	# Use SNMPv2c
+our $o_domain		= undef;	# Use IPv6
+our $o_check_type	= "cisco";	# Default check is "cisco"
+our @valid_types		= ("cisco","nokia","bc","iron","foundry","linux","ciscoSW","extremeSW","juniper","procurve","netscreen","ciscoNEW","citrix","transmode");	
+our $o_temp		= undef;	# Max temp
+our $o_fan		= undef;	# Min fan speed
+our $o_login		= undef;	# Login for SNMPv3
+our $o_passwd		= undef;	# Pass for SNMPv3
+our $v3protocols		= undef;	# V3 protocol list.
+our $o_authproto		= 'sha';	# Auth protocol
+our $o_privproto		= 'aes';	# Priv protocol
+our $o_privpass		= undef;	# priv password
 
 
 # ============================================================================
@@ -718,6 +758,7 @@ if ( ($voltexist ==0) && ($tempexist ==0) && ($fanexist ==0) && ($psexist ==0) )
 }
 
 my $perf_output="";
+my $perf_outtmp="";
 # Get the data
 my ($i,$cur_status)=(undef,undef); 
 
@@ -754,8 +795,12 @@ if ($tempexist !=0) {
       $temp_global=1;
     }
     if (defined($$resultat{$ciscoTempTableValue."." . $tempindex[$i]})) {
-      $perf_output.=" '".$$resultat{$ciscoTempTableDesc .".".$tempindex[$i]}."'=" ;
-      $perf_output.=$$resultat{$ciscoTempTableValue."." . $tempindex[$i]}. ";;;;";
+      my $reformat_desc = $$resultat{$ciscoTempTableDesc .".".$tempindex[$i]};
+      $reformat_desc    =~ s/[\s()]//g;
+      $perf_outtmp.= $reformat_desc;
+      $perf_outtmp.= "TempVal=".$$resultat{$ciscoTempTableValue."." . $tempindex[$i]}." ";
+      $perf_outtmp.= $reformat_desc;
+      $perf_outtmp.= "TempMax=".$$resultat{$ciscoTempTableThresh."." . $tempindex[$i]}." ";
     }
     if ($Nagios_state[$CiscoEnvMonNagios{$cur_status}] ne "OK") {
       $temp_global= 1;
@@ -862,12 +907,11 @@ if ($tempexist !=0) {
 # Clear the SNMP Transport Domain and any errors associated with the object.
 $session->close;
 
-#print $output," : ",$Nagios_state[$global_state]," | ",$perf_output,"\n";
-print $output," : ",$Nagios_state[$global_state];
-if (defined $o_perf && $perf_output ne ""){
-  print "| $perf_output";
-}
-print "\n";
+	if (defined($o_perf)) {
+	print $output," : ",$Nagios_state[$global_state]," | ",$perf_outtmp,"\n";
+	} else {
+	print $output," : ",$Nagios_state[$global_state],"\n";
+	}
 $exit_val=$ERRORS{$Nagios_state[$global_state]};
 
 exit $exit_val;
@@ -1588,78 +1632,232 @@ if ($o_check_type eq "ciscoSW") {
 
 if ($o_check_type eq "juniper") {
 
-	verb("Checking juniper env");	
+	verb("Checking juniper env");
 
 	# Define variables
-	my $output		= "";	
+	my $output		= '';
 	my $final_status	= 0;
-	my $card_output		= "";
-	my $ignore		= ": Ignored: ";
-	my $tmp_status;
-	my $result_t;
-	my $index;
-	my @temp_oid;
-	my ($num_cards,$num_cards_ok)=(0,0);
+	my $card_output		= '';
+	my $card_ignore_output	= '';
+	my $fru_output		= '';
+	my $fru_ignore_output	= '';
+	my $alarm_output	= '';
+	my $kern_output		= '';
+	my ($num_cards,$num_cards_ok) = (0,0);
+	my ($num_frus,$num_frus_ok) = (0,0);
 
         # Get SNMP table(s) and check the result
-	my $resultat_c =  $session->get_table(Baseoid => $juniper_operating_state);
-	&check_snmp_result($resultat_c,$session->error);
 
-	if (defined($resultat_c)) {	
-		foreach my $key ( keys %$resultat_c) {
+	# Kernel Memory
+	my $kern_result =  $session->get_request ( VarbindList => [ $juniper_kernel_mem_used ]);
+	&check_snmp_result($kern_result,$session->error);
+
+	# Alarm State
+	my $alarm_result =  $session->get_request ( VarbindList => [
+								    $juniper_alarm_yellow_state,
+								    $juniper_alarm_yellow_count,
+								    $juniper_alarm_red_state,
+								    $juniper_alarm_red_count
+								   ]);
+	&check_snmp_result($alarm_result,$session->error);
+
+	# Component Operating State
+	my $oper_result =  $session->get_entries(-columns => [
+							     $juniper_operating_descr,
+							     $juniper_operating_state,
+							     $juniper_operating_temp,
+							     $juniper_operating_cpu,
+							     $juniper_operating_isr,
+							     $juniper_operating_buffer,
+							     $juniper_operating_heap,
+							     $juniper_operating_1min_load,
+							     $juniper_operating_5min_load,
+							     $juniper_operating_15min_load
+							    ]);
+	&check_snmp_result($oper_result,$session->error);
+
+	# FRU State
+	my $fru_result =  $session->get_entries(-columns => [
+							     $juniper_fru_name,
+							     $juniper_fru_state,
+							     $juniper_fru_temp
+							    ]);
+	&check_snmp_result($fru_result,$session->error);
+
+	# Juniper Components
+	if (defined($oper_result)) {
+		foreach my $key ( keys %$oper_result) {
 			if ($key =~ /$juniper_operating_state/) {
 				$num_cards++;
-				$tmp_status=$juniper_operating_status[$$resultat_c{$key}];
-				if ($tmp_status == 0) {
+				my $index = $key;
+				$index =~ s/^$juniper_operating_state.//;
+				my $descr  = $$oper_result{$juniper_operating_descr.'.'.$index};
+				my $state  = $$oper_result{$juniper_operating_state.'.'.$index};
+				my $status = $juniper_operating_status[$state];
+				my $temp   = $$oper_result{$juniper_operating_temp.'.'.$index};
+				my $cpu    = $$oper_result{$juniper_operating_cpu.'.'.$index};
+				my $isr    = $$oper_result{$juniper_operating_isr.'.'.$index};
+				my $buffer = $$oper_result{$juniper_operating_buffer.'.'.$index};
+				my $heap   = $$oper_result{$juniper_operating_heap.'.'.$index};
+				my $load1  = $$oper_result{$juniper_operating_1min_load.'.'.$index};
+				my $load5  = $$oper_result{$juniper_operating_5min_load.'.'.$index};
+				my $load15 = $$oper_result{$juniper_operating_15min_load.'.'.$index};
+
+				if ($status == 0 &&
+				    $temp   < $juniper_thresh_temp &&
+				    $cpu    < $juniper_thresh_cpu &&
+				    $isr    < $juniper_thresh_isr &&
+				    $buffer < $juniper_thresh_buffer &&
+				    $heap   < $juniper_thresh_heap &&
+				    $load1  < $juniper_thresh_1min_load &&
+				    $load5  < $juniper_thresh_5min_load &&
+				    $load15 < $juniper_thresh_15min_load) {
 					$num_cards_ok++;
 				} else {
-					$index = $key;
-					$index =~ s/^$juniper_operating_state.//;
-					@temp_oid=($juniper_operating_descr.".".$index);
-					$result_t = $session->get_request( Varbindlist => \@temp_oid);	
-					if ($$result_t{$juniper_operating_descr.".".$index} =~ /PCMCIA|USB|Flash|Fan Tray [0-9]$/ && $tmp_status == 3) {
-						$ignore.= "(" .$$result_t{$juniper_operating_descr.".".$index} ."),"; 
-					}
-
-					else {
-						$final_status = &set_status($tmp_status,$final_status);			
-						if (!defined($result_t)) { 
-							$card_output.="Invalid component(UNKNOWN)";
-						}
-						else {
-							if ($card_output ne "") {$card_output.=", ";}
-							$card_output.= "(" .$$result_t{$juniper_operating_descr.".".$index} ."): "; 
-							$card_output.= "status " . $juniper_operating_status_text[$$resultat_c{$key}];
+					if ($descr =~ /PCMCIA|USB|Flash|Fan Tray [0-9]$/ && $status == 3 && 0) {
+						$card_ignore_output .= ', ' if ($card_ignore_output ne '');
+						$card_ignore_output .= '(' . $descr . ')';
+					} else {
+						$final_status = &set_status(1,$final_status); # Assume at least a warning status
+						$final_status = &set_status($status,$final_status); # but could be worse
+						$card_output .= ', ' if ($card_output ne '');
+						if (!defined($descr)) {
+							$card_output.= 'Invalid component(UNKNOWN)';
+						} else {
+							$card_output .= '(' . $descr . '):';
+							$card_output .= ' status ' . $juniper_operating_status_text[$state] if ($status != 0);
+							$card_output .= ' temp ' . $temp .'C' if ($temp >= $juniper_thresh_temp);
+							$card_output .= ' cpu ' . $cpu . '%' if ($cpu >= $juniper_thresh_cpu);
+							$card_output .= ' isr ' . $isr . '%' if ($isr >= $juniper_thresh_isr);
+							$card_output .= ' buffer ' . $buffer . '%' if ($buffer >= $juniper_thresh_buffer);
+							$card_output .= ' heap ' . $heap . '%' if ($heap >= $juniper_thresh_heap);
+							$card_output .= ' load1m ' . $load1/100 if ($load1 >= $juniper_thresh_1min_load);
+							$card_output .= ' load5m ' . $load5/100 if ($load5 >= $juniper_thresh_5min_load);
+							$card_output .= ' load15m ' . $load15/100 if ($load15 >= $juniper_thresh_15min_load);
 						}
 					}
 				}
 			}
 		}
-		if ($card_output ne "") {$card_output.=", ";}
+	}
+
+	if ($num_cards == 0) {
+		$card_output .= "No components found : UNKNOWN\n";
+		$final_status = &set_status(3,$final_status);
+		#exit $ERRORS{"UNKNOWN"};
+	}
+	$output .= ' : ' if ($output ne '');
+	$output = $card_output;
+	if ($num_cards != 0) {
+		if ($num_cards == $num_cards_ok) {
+			$output .= ' : ' if ($card_output ne '');
+			$output .= $num_cards . ' components OK';
+		} else {
+			$output .= ' : ' if ($card_output ne '');
+			$output .= $num_cards_ok . '/' . $num_cards .' components OK';
+			$output .= ': Ignored: ' . $card_ignore_output if ($card_ignore_output ne '');
+		}
+	}
+
+	# Juniper FRUs
+	if (defined($fru_result)) {
+		foreach my $key ( keys %$fru_result) {
+			if ($key =~ /$juniper_fru_state/) {
+				$num_frus++;
+				my $index = $key;
+				$index =~ s/^$juniper_fru_state.//;
+				my $name   = $$fru_result{$juniper_fru_name.'.'.$index};
+				my $state  = $$fru_result{$juniper_fru_state.'.'.$index};
+				my $status = $juniper_fru_status[$state];
+				my $temp   = $$fru_result{$juniper_fru_temp.'.'.$index};
+
+				if ($status == 0 &&
+				    $temp < $juniper_thresh_temp) {
+					$num_frus_ok++;
+				} else {
+					if ($name =~ /^Routing Engine$/ && $status == 3) {
+						$fru_ignore_output .= ', ' if ($fru_ignore_output ne '');
+						$fru_ignore_output .= '(' . $name . ')';
+					} else {
+						$final_status = &set_status(1,$final_status); # Assume at least a warning status
+						$final_status = &set_status($status,$final_status); # but could be worse
+						$fru_output .= ', ' if ($fru_output ne '');
+						if (!defined($name)) {
+							$fru_output.= 'Invalid FRU(UNKNOWN)';
+						} else {
+							$fru_output .= '(' . $name . '):';
+							$fru_output .= ' status ' . $juniper_fru_status_text[$state] if ($status != 0);
+							$fru_output .= ' temp ' . $temp .'C' if ($temp >= $juniper_thresh_temp);
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if ($num_frus == 0) {
+		$fru_output .= "No FRUs found : UNKNOWN\n";
+		$final_status = &set_status(3,$final_status);
+		#exit $ERRORS{"UNKNOWN"};
+	}
+	$output .= ' : ' if ($output ne '');
+	$output .= $fru_output;
+	if ($num_frus != 0) {
+		if ($num_frus == $num_frus_ok) {
+			$output .= ' : ' if ($fru_output ne '');
+			$output .= $num_frus . ' FRUs OK';
+		} else {
+			$output .= ' : ' if ($fru_output ne '');
+			$output .= $num_frus_ok . '/' . $num_frus .' FRUs OK';
+			$output .= ': Ignored: ' . $fru_ignore_output if ($fru_ignore_output ne '');
+		}
+	}
+
+	# Juniper Alarms
+	if (defined($alarm_result)) {
+		if ($alarm_result->{$juniper_alarm_red_state} == 2 &&
+		    $alarm_result->{$juniper_alarm_red_count} == 0 &&
+		    $alarm_result->{$juniper_alarm_yellow_state} == 2 &&
+		    $alarm_result->{$juniper_alarm_yellow_count} == 0) {
+			$alarm_output .= 'No Alarms';
+		} else {
+			if ($alarm_result->{$juniper_alarm_red_state} == 3 ||
+			    $alarm_result->{$juniper_alarm_red_count} > 0) {
+				if ($alarm_output ne '') {$alarm_output.=', ';}
+				$alarm_output .= $alarm_result->{$juniper_alarm_red_count}.' Red Alarm(s)';
+				$final_status = &set_status(2,$final_status);
+			}
+			if ($alarm_result->{$juniper_alarm_yellow_state} == 3 ||
+			    $alarm_result->{$juniper_alarm_yellow_count} > 0) {
+				if ($alarm_output ne '') {$alarm_output.=', ';}
+				$alarm_output .= $alarm_result->{$juniper_alarm_yellow_count}.' Yellow Alarm(s)';
+				$final_status = &set_status(1,$final_status);
+			}
+		}
+		$output.=' : ' if ($output ne '');
+		$output .= $alarm_output;
+	}
+
+	# Juniper Kernel Memory
+	if (defined($kern_result)) {
+		if ($kern_result->{$juniper_kernel_mem_used} >= $juniper_thresh_kernel_mem) {
+			$kern_output = 'Kernel Mem ' . $kern_result->{$juniper_kernel_mem_used} . '%';
+			$final_status = &set_status(1,$final_status);
+		} else {
+			$kern_output = 'Kernel Mem OK';
+		}
+		$output.=' : ' if ($output ne '');
+		$output .= $kern_output;
 	}
 
 	# Clear the SNMP Transport Domain and any errors associated with the object.
 	$session->close;
 
-	if ($num_cards==0) {
-		print "No components found : UNKNOWN\n";
-		exit $ERRORS{"UNKNOWN"};
-	}
-	$output=$card_output;
-	if ($output ne "") {$output.=" : ";}
-	if ($num_cards!=0) {
-		if ($num_cards == $num_cards_ok) {
-		  $output.= $num_cards . " components OK";
-		} else {
-		  $output.= $num_cards_ok . "/" . $num_cards ." components OK" .$ignore;
-		}
-	}
-
 	if ($final_status == 3) {
 		print $output," : UNKNOWN\n";
 		exit $ERRORS{"UNKNOWN"};
 	}
-	
+
 	if ($final_status == 2) {
 		print $output," : CRITICAL\n";
 		exit $ERRORS{"CRITICAL"};
@@ -1669,7 +1867,7 @@ if ($o_check_type eq "juniper") {
 		print $output," : WARNING\n";
 		exit $ERRORS{"WARNING"};
 	}
-	
+
 	print $output," : OK\n";
 	exit $ERRORS{"OK"};
 }
@@ -2745,3 +2943,5 @@ if ($o_check_type eq "transmode") {
 
 print "Unknown check type : UNKNOWN\n";
 exit $ERRORS{"UNKNOWN"};
+
+
