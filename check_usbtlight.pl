@@ -52,21 +52,21 @@ my $debug = undef;
 my $force = 1;
 
 $status = GetOptions(
-	"a"              => \$opt_all,
-	"all"            => \$opt_all,
-	"url=s"          => \$opt_url,
-	"hostgroup=s"    => \$opt_hostgroup,
-	"servicegroup=s" => \$opt_servicegroup,
-	"help|h"         => \$opt_h,
-	"user=s"         => \$opt_user,
-	"passwd=s"       => \$opt_passwd,
+    "a"              => \$opt_all,
+    "all"            => \$opt_all,
+    "url=s"          => \$opt_url,
+    "hostgroup=s"    => \$opt_hostgroup,
+    "servicegroup=s" => \$opt_servicegroup,
+    "help|h"         => \$opt_h,
+    "user=s"         => \$opt_user,
+    "passwd=s"       => \$opt_passwd,
     "debug"          => \$debug,
-#    "force"          => \$force,
+#   "force"          => \$force,
 );
 
 if ( $opt_h || $status == 0 || !$opt_url ) {
-	print_help();
-	exit 0;
+    print_help();
+    exit 0;
 }
 
 my $device = find_light();
@@ -78,14 +78,17 @@ if (LWP::UserAgent->VERSION >= 6.0){
   $ua->ssl_opts(verify_hostname => 0, SSL_verify_mode => 0x00);               # disable SSL cert verification
 }
 
-my $url = $opt_url . "/cgi-bin/status.cgi?host=all&type=detail&servicestatustypes=20&serviceprops=42&noheader=1&embedded=1";
+# https://www.icinga.com/docs/icinga1/latest/en/cgiparams.html#cgiparams-filter
+# HOST_NO_SCHEDULED_DOWNTIME=2 HOST_STATE_UNACKNOWLEDGED=8 HOST_CHECKS_ENABLED=32 HOST_NOTIFICATIONS_ENABLED=8192 => hostprops=8234
+# SERVICE_NO_SCHEDULED_DOWNTIME=2 SERVICE_STATE_UNACKNOWLEDGED=8 SERVICE_CHECKS_ENABLED=32 SERVICE_NOTIFICATIONS_ENABLED=8192 => serviceprops=42
+my $url = $opt_url . "/cgi-bin/status.cgi?host=all&type=detail&servicestatustypes=20&serviceprops=42&hostprops=8234&noheader=1&embedded=1";
 
 $url .= "&hostgroup=" . $opt_hostgroup."&style=all"
-  if ( $opt_hostgroup
-	&& $opt_hostgroup ne ""
-	&& $opt_hostgroup ne "--servicegroup" );
+    if ( $opt_hostgroup
+    && $opt_hostgroup ne ""
+    && $opt_hostgroup ne "--servicegroup" );
 $url .= "&servicegroup=" . $opt_servicegroup
-  if ( $opt_servicegroup && $opt_servicegroup ne "" );
+    if ( $opt_servicegroup && $opt_servicegroup ne "" );
 
 my $req = new HTTP::Request GET => $url;
 if ($opt_user){
@@ -95,106 +98,107 @@ if ($opt_user){
 my $res = $ua->request($req);
 
 if ( $res->is_success ) {
-	my $content = $res->content;
+    my $content = $res->content;
 
-	my $status = 'green';
-	my $matches;
-	my @lines;
+    my $status = 'green';
+    my $matches;
+    my @lines;
 
-	@lines = split( /\n/, $content );
+    @lines = split( /\n/, $content );
 
-	my $device_status = 'green';
-	foreach (@lines) {
-		if ( /<\/TR><\/TABLE><\/TD>/ ... /<\/TR>/ ) {
+    my $device_status = 'green';
+    foreach (@lines) {
 
-			$device_status = 'green'  if (/<\/TR><\/TABLE><\/TD>/);
-			$device_status = 'yellow' if (m/statusWARNING/);
-			$device_status = 'red'    if (m/statusCRITICAL/);
+        if ( /<\/tr><\/table><\/td>/i ... /<\/tr>/i ) {
 
-			# Only Hardstate are interesting
-			if (m/>([0-9]+)\/([0-9]+)<\/TD>/) {
-				$device_status = 'green' if ( $1 ne $2 );
-			}
+            $device_status = 'green'  if (/<\/tr><\/table><\/td>/i);
+            $device_status = 'yellow' if (m/statusWARNING/);
+            $device_status = 'red'    if (m/statusCRITICAL/);
+            print "device_status $device_status\n" if (defined($debug));
 
-			if (/<\/TR>/) {
-				$status = $device_status if ( $device_status eq 'red' );
-				$status = $device_status
-				  if ( $device_status eq 'yellow' and $status eq 'green' );
+            # Only Hardstate are interesting
+            if (m/>([0-9]+)\/([0-9]+)<\/td>/i) {
+                $device_status = 'green' if ( $1 ne $2 );
+                print "device_status $device_status ($1/$2)\n" if (defined($debug));
+            }
 
-			}
+            if (/<\/tr>/i) {
+                $status = $device_status if ( $device_status eq 'red' );
+                $status = $device_status if ( $device_status eq 'yellow' and $status eq 'green' );
+                print "status $status\n" if (defined($debug));
+            }
+        }
+    }
+    $status = 'red' if ( $content =~ m/statusHOSTDOWN/ );
+    #$status = 'red' if ( $content =~ m/statusHOSTDOWNACK/ );
 
-		}
+    my $perfdata = "|green=";
+    if ( $status eq "green" ) {
+        $perfdata .= "1";
+    }
+    else {
+        $perfdata .= "0";
+    }
+    $perfdata .= " yellow=";
+    if ( $status eq "yellow" ) {
+        $perfdata .= "1";
+    }
+    else {
+        $perfdata .= "0";
+    }
 
-	}
-	$status = 'red' if ( $content =~ m/statusHOSTDOWN/ );
+    $perfdata .= " red=";
+    if ( $status eq "red" ) {
+        $perfdata .= "1";
+    }
+    else {
+        $perfdata .= "0";
+    }
 
-	my $perfdata = "|green=";
-	if ( $status eq "green" ) {
-		$perfdata .= "1";
-	}
-	else {
-		$perfdata .= "0";
-	}
-	$perfdata .= " yellow=";
-	if ( $status eq "yellow" ) {
-		$perfdata .= "1";
-	}
-	else {
-		$perfdata .= "0";
-	}
-
-	$perfdata .= " red=";
-	if ( $status eq "red" ) {
-		$perfdata .= "1";
-	}
-	else {
-		$perfdata .= "0";
-	}
-
-	my $bulb = $COLOURS{$status};
+    my $bulb = $COLOURS{$status};
 
     # switch bulb
     switch_bulb( $bulb, $device );
 
-	print "OK - Status \"" . $status . "\"." . $perfdata . "\n";
+    print "OK - Status \"" . $status . "\"." . $perfdata . "\n";
 
 }
 else {
-	print
+    print
 "Cannot reach nagios webinterface. Please check url, user and password.| green=0 yellow=0 red=1\n\n";
-	exit 2; # CRITICAL;
+    exit 2; # CRITICAL;
 }
 
 sub print_help {
-	printf "\nusage: \n";
-	printf
+    printf "\nusage: \n";
+    printf
 "$PROGNAME --url <url> [--user <user>] [--passwd <passwd>] [--hostgroup <hostgroup>] [--servicegroup <servicegroup>] \n\n";
-	printf "   --url          url to nagios\n";
-	printf "   --user         nagios user for the webinterface\n";
-	printf "   --passwd       password for the nagios user\n";
-	printf "   --hostgroup    nagios hostgroup\n";
-	printf "   --servicegroup nagios servicegroup\n";
-	printf "   --debug        show debugging\n";
-#	printf "   --force        ignore current state of bulbs and force on/off (may cause flickering)\n";
-	printf "\n";
-	printf "Requires clewarecontrol v2.5 from http://www.vanheusden.com/clewarecontrol\n";
-	printf "DO NOT USE Version 1.0 (it's too slow!)\n";
-	printf "Copyright (C) 2004, 2005 Gerd Mueller / Netways GmbH\n";
-	printf "Modified for USB traffic light by Birger Schmidt / Netways GmbH\n";
-	printf "Modified again by Davey Jones / Netways GmbH\n";
-	printf "Modified for HTTPS and clewarecontrol 2.5 support by Rene Koch / ovido gmbh\n";
-	printf "$PROGNAME comes with ABSOLUTELY NO WARRANTY\n";
-	printf "This program is licensed under the terms of the ";
-	printf "GNU General Public License\n(check source code for details)\n";
-	printf "\n\n";
-	exit 0;
+    printf "   --url          url to nagios\n";
+    printf "   --user         nagios user for the webinterface\n";
+    printf "   --passwd       password for the nagios user\n";
+    printf "   --hostgroup    nagios hostgroup\n";
+    printf "   --servicegroup nagios servicegroup\n";
+    printf "   --debug        show debugging\n";
+#    printf "   --force        ignore current state of bulbs and force on/off (may cause flickering)\n";
+    printf "\n";
+    printf "Requires clewarecontrol v2.5 from http://www.vanheusden.com/clewarecontrol\n";
+    printf "DO NOT USE Version 1.0 (it's too slow!)\n";
+    printf "Copyright (C) 2004, 2005 Gerd Mueller / Netways GmbH\n";
+    printf "Modified for USB traffic light by Birger Schmidt / Netways GmbH\n";
+    printf "Modified again by Davey Jones / Netways GmbH\n";
+    printf "Modified for HTTPS and clewarecontrol 2.5 support by Rene Koch / ovido gmbh\n";
+    printf "$PROGNAME comes with ABSOLUTELY NO WARRANTY\n";
+    printf "This program is licensed under the terms of the ";
+    printf "GNU General Public License\n(check source code for details)\n";
+    printf "\n\n";
+    exit 0;
 
 }
 
 sub switch_bulb {
     # avoid flicker by only switching when we change state
-	my ($colour, $device) = @_;
-	my $sysoutput = "ERROR clewarecontrol not found";
+    my ($colour, $device) = @_;
+    my $sysoutput = "ERROR clewarecontrol not found";
 
     # go through each bulb
     # red=0, yellow=1, green=2
@@ -225,7 +229,7 @@ sub find_light
     $sysoutput = `clewarecontrol -l`;
     if (!defined($sysoutput))
     {
-	    print "ERROR clewarecontrol not found\n";
+        print "ERROR clewarecontrol not found\n";
         exit 2;
     }
         
@@ -235,3 +239,5 @@ sub find_light
     print "USB Light not found\n";
     exit 2;
 }
+
+# vim: tabstop=4 shiftwidth=4 expandtab syntax=perl
